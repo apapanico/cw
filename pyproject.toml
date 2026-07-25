@@ -1,0 +1,27 @@
+[project]
+name = "cw"
+version = "0.1.0"
+description = "Claude Code worktree session launcher"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "questionary>=2.1.0",
+    "rich>=14.0.0",
+    "textual>=6.0.0",
+    "typer>=0.16.0",
+]
+
+[project.scripts]
+cw = "cw.cli:entrypoint"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.0,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

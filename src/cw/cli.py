@@ -1,0 +1,1066 @@
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Annotated, Iterable, Optional
+
+import questionary
+import typer
+from rich.console import Console
+from rich.markup import escape
+from rich.table import Table
+from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.widgets import DataTable, Footer, Header, Input, Static
+
+WORKTREE_DIR = Path(".claude/worktrees")
+BRANCH_PREFIX = "claude/"
+EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
+
+console = Console(stderr=True)
+out = Console()
+
+app = typer.Typer(
+    add_completion=True,
+    invoke_without_command=True,
+    no_args_is_help=False,
+    help="Claude Code worktree session launcher.",
+)
+
+
+class CwError(RuntimeError):
+    pass
+
+
+class ModeError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class WorktreeSession:
+    slug: str
+    branch: str
+    title: str
+    tmux: str
+    path: Path
+    dirty_count: int = 0
+    unpushed_count: int = 0
+    upstream: str = ""
+    last_commit: str = ""
+
+
+@dataclass(frozen=True)
+class TuiResult:
+    action: str
+    slug: str | None = None
+
+
+def info(message: str) -> None:
+    console.print(f"cw: {message}")
+
+
+def die(message: str) -> None:
+    raise typer.BadParameter(message)
+
+
+def require_cmd(name: str) -> None:
+    if shutil.which(name) is None:
+        raise CwError(f"required command not found on PATH: {name}")
+
+
+def run(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    check: bool = True,
+    capture: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=str(cwd) if cwd else None,
+        check=check,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
+    )
+
+
+def git(root: Path, *args: str, check: bool = True, capture: bool = True) -> str:
+    cp = run(["git", "-C", str(root), *args], check=check, capture=capture)
+    return cp.stdout or ""
+
+
+def repo_root() -> Path:
+    cp = run(["git", "worktree", "list", "--porcelain"], check=False, capture=True)
+    if cp.returncode != 0:
+        raise CwError("not inside a git repository")
+    for line in (cp.stdout or "").splitlines():
+        if line.startswith("worktree "):
+            return Path(line.removeprefix("worktree ")).resolve()
+    raise CwError("not inside a git repository")
+
+
+def session_name(root: Path, slug: str) -> str:
+    return f"{root.name}_worktree-{slug}"
+
+
+def display_name(root: Path, slug: str) -> str:
+    return f"{root.name}/{slug}"
+
+
+def slugify(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower())
+    slug = re.sub(r"-+", "-", slug)
+    return slug.strip("-")
+
+
+def map_mode(mode: str) -> str:
+    match mode:
+        case "manual":
+            return "manual"
+        case "accept" | "accept-edits" | "acceptedits" | "acceptEdits":
+            return "acceptEdits"
+        case "plan":
+            return "plan"
+        case "auto":
+            return "auto"
+        case "bypass" | "bypassPermissions" | "yolo":
+            return "bypassPermissions"
+        case "dontask" | "dont-ask" | "dontAsk":
+            return "dontAsk"
+        case _:
+            raise ModeError(mode)
+
+
+def validate_effort(effort: str | None) -> str:
+    value = effort or ""
+    if value not in EFFORTS:
+        raise CwError(f"unknown --effort '{value}' (low|medium|high|xhigh|max)")
+    return value
+
+
+def tmux_alive(session: str) -> bool:
+    if shutil.which("tmux") is None:
+        return False
+    cp = run(["tmux", "has-session", "-t", f"={session}"], check=False, capture=True)
+    return cp.returncode == 0
+
+
+def tmux_status(session: str) -> str:
+    if not tmux_alive(session):
+        return "dead"
+    cp = run(
+        ["tmux", "display-message", "-p", "-t", f"={session}", "#{session_attached}"],
+        check=False,
+        capture=True,
+    )
+    attached = (cp.stdout or "0").strip()
+    return "attached" if attached.isdigit() and int(attached) > 0 else "detached"
+
+
+def parse_worktrees_porcelain(text: str) -> list[tuple[Path, str]]:
+    rows: list[tuple[Path, str]] = []
+    path: Path | None = None
+    branch = ""
+    for line in [*text.splitlines(), ""]:
+        if line.startswith("worktree "):
+            path = Path(line.removeprefix("worktree "))
+            branch = ""
+        elif line.startswith("branch "):
+            branch = line.removeprefix("branch refs/heads/")
+        elif line == "detached":
+            branch = "(detached)"
+        elif line == "":
+            if path and ".claude/worktrees" in path.as_posix():
+                rows.append((path, branch))
+            path = None
+            branch = ""
+    return rows
+
+
+def worktree_branch(root: Path, slug: str) -> str:
+    for path, branch in parse_worktrees_porcelain(git(root, "worktree", "list", "--porcelain")):
+        if path.name == slug:
+            return branch
+    return ""
+
+
+def branch_description(root: Path, branch: str) -> str:
+    if not branch or branch == "(detached)":
+        return ""
+    cp = run(
+        ["git", "-C", str(root), "config", f"branch.{branch}.description"],
+        check=False,
+        capture=True,
+    )
+    return (cp.stdout or "").rstrip("\n")
+
+
+def dirty_count(worktree: Path) -> int:
+    return len([line for line in git(worktree, "status", "--porcelain", check=False).splitlines() if line])
+
+
+def unpushed_count(root: Path, branch: str) -> int:
+    if not branch or branch == "(detached)":
+        return 0
+    value = git(root, "rev-list", "--count", branch, "--not", "--remotes", check=False).strip()
+    return int(value or "0")
+
+
+def upstream_ref(root: Path, branch: str) -> str:
+    if not branch or branch == "(detached)":
+        return ""
+    return git(root, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}", check=False).strip()
+
+
+def last_commit(root: Path, branch: str) -> str:
+    ref = branch if branch and branch != "(detached)" else "HEAD"
+    return git(root, "log", "-1", "--format=%cr  %s", ref, check=False).strip()
+
+
+def session_state(session: WorktreeSession) -> str:
+    parts = []
+    if session.dirty_count:
+        parts.append("dirty")
+    if session.unpushed_count:
+        parts.append("unpushed")
+    return "+".join(parts) if parts else "clean"
+
+
+def render_prompt_text(
+    text: str,
+    *,
+    slug: str,
+    branch: str,
+    base: str,
+    title: str,
+    repo: str,
+    wt: str,
+) -> str:
+    values = {
+        "{{slug}}": slug,
+        "{{branch}}": branch,
+        "{{base}}": base,
+        "{{title}}": title,
+        "{{repo}}": repo,
+        "{{wt}}": wt,
+    }
+    for key, value in values.items():
+        text = text.replace(key, value)
+    return text
+
+
+def render_prompt_file(
+    prompt_path: Path,
+    *,
+    slug: str,
+    branch: str,
+    base: str,
+    title: str,
+    repo: str,
+    wt: str,
+) -> str:
+    return render_prompt_text(
+        prompt_path.read_text(),
+        slug=slug,
+        branch=branch,
+        base=base,
+        title=title,
+        repo=repo,
+        wt=wt,
+    )
+
+
+def default_prompt_path(prompt_file: Optional[Path]) -> Path:
+    if prompt_file is not None:
+        return prompt_file.expanduser()
+    env = os.environ.get("CW_PROMPT_FILE")
+    if env:
+        return Path(env).expanduser()
+    return Path.home() / ".config/cw/session-prompt.md"
+
+
+def tmux_flag(native: bool) -> str:
+    return "--tmux" if native else "--tmux=classic"
+
+
+def mode_value(mode: str | None) -> str:
+    if not mode:
+        return ""
+    try:
+        return map_mode(mode)
+    except ModeError as exc:
+        raise CwError(f"unknown --mode '{exc.args[0]}' (manual|accept|plan|auto|bypass)") from exc
+
+
+def claude_base_args(
+    *,
+    slug: str,
+    title: str,
+    native: bool,
+    rc: bool,
+    mode: str | None,
+    model: str | None,
+    effort: str | None,
+) -> list[str]:
+    pm = mode_value(mode)
+    validate_effort(effort)
+    args = ["claude", "--worktree", slug, tmux_flag(native), "--name", title]
+    if rc:
+        args.append("--remote-control")
+    if pm:
+        args.extend(["--permission-mode", pm])
+    if model:
+        args.extend(["--model", model])
+    if effort:
+        args.extend(["--effort", effort])
+    return args
+
+
+def append_prompt_arg(
+    args: list[str],
+    *,
+    prompt_file: Optional[Path],
+    no_prompt: bool,
+    slug: str,
+    branch: str,
+    base: str,
+    title: str,
+    repo: str,
+    wt: str,
+) -> None:
+    prompt_path = default_prompt_path(prompt_file)
+    if no_prompt or not prompt_path.is_file():
+        return
+    rendered = render_prompt_file(
+        prompt_path,
+        slug=slug,
+        branch=branch,
+        base=base,
+        title=title,
+        repo=repo,
+        wt=wt,
+    )
+    if rendered:
+        args.extend(["--append-system-prompt", rendered])
+        info(f"  + session prompt from {prompt_path}")
+
+
+def execvp(args: list[str]) -> None:
+    os.execvp(args[0], args)
+
+
+def list_sessions(root: Path) -> list[WorktreeSession]:
+    sessions = []
+    for path, branch in parse_worktrees_porcelain(git(root, "worktree", "list", "--porcelain")):
+        slug = path.name
+        title = branch_description(root, branch)
+        abs_path = path if path.is_absolute() else root / path
+        sessions.append(
+            WorktreeSession(
+                slug=slug,
+                branch=branch,
+                title=title,
+                tmux=tmux_status(session_name(root, slug)),
+                path=path,
+                dirty_count=dirty_count(abs_path),
+                unpushed_count=unpushed_count(root, branch),
+                upstream=upstream_ref(root, branch),
+                last_commit=last_commit(abs_path, branch),
+            )
+        )
+    return sessions
+
+
+def print_sessions(sessions: Iterable[WorktreeSession]) -> None:
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("NAME", no_wrap=True)
+    table.add_column("BRANCH", no_wrap=True)
+    table.add_column("TMUX", no_wrap=True)
+    table.add_column("STATE", no_wrap=True)
+    table.add_column("TITLE")
+    count = 0
+    for session in sessions:
+        count += 1
+        table.add_row(session.slug, session.branch, session.tmux, session_state(session), session.title)
+    if count:
+        out.print(table)
+    else:
+        out.print(f"(no worktree sessions under {WORKTREE_DIR})")
+
+
+def pick_session(root: Path, *, message: str = "Select a session") -> WorktreeSession | None:
+    sessions = list_sessions(root)
+    if not sessions:
+        out.print(f"(no worktree sessions under {WORKTREE_DIR})")
+        return None
+    choices = [
+        questionary.Choice(
+            f"{s.slug}  [{s.tmux}]  {s.branch}  {s.title}".rstrip(),
+            value=s,
+        )
+        for s in sessions
+    ]
+    return questionary.select(message, choices=choices).ask()
+
+
+def state_text(value: str) -> Text:
+    if value == "attached":
+        return Text(value, style="bold green")
+    if value == "detached":
+        return Text(value, style="yellow")
+    if value == "dead":
+        return Text(value, style="dim")
+    if value == "clean":
+        return Text(value, style="green")
+    if "dirty" in value:
+        return Text(value, style="bold red")
+    return Text(value, style="yellow")
+
+
+class CwTui(App[TuiResult | None]):
+    CSS = """
+    Screen {
+        background: #101418;
+        color: #d7dee8;
+    }
+
+    #top {
+        height: 4;
+        padding: 0 1;
+        border-bottom: solid #334155;
+        background: #151b22;
+    }
+
+    #repo {
+        height: 1;
+        color: #e2e8f0;
+    }
+
+    #worktrees {
+        height: 1;
+        color: #94a3b8;
+    }
+
+    #filter {
+        width: 1fr;
+        margin-top: 1;
+    }
+
+    #body {
+        height: 1fr;
+    }
+
+    #sessions {
+        width: 60%;
+        height: 100%;
+        border-right: solid #334155;
+    }
+
+    #details {
+        width: 40%;
+        height: 100%;
+        padding: 1 2;
+        overflow-y: auto;
+        background: #0f1720;
+    }
+
+    #actions {
+        height: 3;
+        padding: 0 1;
+        border-top: solid #334155;
+        background: #151b22;
+        color: #cbd5e1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("n", "new", "[n] new", show=False),
+        Binding("enter", "resume", "[enter] resume", show=False),
+        Binding("s", "status", "[s] status", show=False),
+        Binding("/", "focus_filter", "[/] filter", show=False),
+        Binding("x", "remove", "[x] remove", show=False),
+        Binding("k", "kill", "[k] kill", show=False),
+        Binding("p", "prune", "[p] prune", show=False),
+        Binding("d", "doctor", "[d] doctor", show=False),
+        Binding("?", "help", "[?] help", show=False),
+        Binding("q", "quit", "[q] quit", show=False),
+    ]
+
+    def __init__(self, root: Path):
+        super().__init__()
+        self.root = root
+        self.sessions: list[WorktreeSession] = []
+        self.visible_sessions: list[WorktreeSession] = []
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Vertical(id="top"):
+            yield Static(f"Repo  {self.root}", id="repo")
+            yield Static(f"Worktrees  {WORKTREE_DIR}", id="worktrees")
+            yield Input(placeholder="Filter sessions by name, branch, title, or state", id="filter")
+        with Horizontal(id="body"):
+            yield DataTable(id="sessions")
+            yield Static("", id="details")
+        yield Static(
+            Text(
+                "[n] new  [enter] resume  [s] status  [/] filter  [x] remove  [k] kill\n"
+                "[p] prune  [d] doctor  [?] help  [q] quit"
+            ),
+            id="actions",
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one("#sessions", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+        table.add_columns("NAME", "TMUX", "BRANCH", "STATE", "TITLE")
+        self.refresh_sessions()
+        table.focus()
+
+    def refresh_sessions(self) -> None:
+        self.sessions = list_sessions(self.root)
+        self.apply_filter(self.query_one("#filter", Input).value)
+
+    def apply_filter(self, needle: str) -> None:
+        needle = needle.strip().lower()
+        if needle:
+            self.visible_sessions = [
+                s
+                for s in self.sessions
+                if needle
+                in " ".join([s.slug, s.branch, s.title, s.tmux, session_state(s)]).lower()
+            ]
+        else:
+            self.visible_sessions = list(self.sessions)
+        table = self.query_one("#sessions", DataTable)
+        table.clear()
+        for s in self.visible_sessions:
+            table.add_row(
+                s.slug,
+                state_text(s.tmux),
+                s.branch,
+                state_text(session_state(s)),
+                s.title,
+                key=s.slug,
+            )
+        if self.visible_sessions:
+            table.cursor_coordinate = (0, 0)
+        self.update_details()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "filter":
+            self.apply_filter(event.value)
+
+    def on_data_table_row_highlighted(self, _: DataTable.RowHighlighted) -> None:
+        self.update_details()
+
+    def current_session(self) -> WorktreeSession | None:
+        table = self.query_one("#sessions", DataTable)
+        row = table.cursor_row
+        if row is None or row < 0 or row >= len(self.visible_sessions):
+            return None
+        return self.visible_sessions[row]
+
+    def update_details(self) -> None:
+        details = self.query_one("#details", Static)
+        s = self.current_session()
+        if s is None:
+            details.update(
+                "[bold]Details[/bold]\n\n"
+                "No matching sessions.\n\n"
+                "Use [n] to create a session or [/] to change the filter."
+            )
+            return
+        details.update(
+            "\n".join(
+                [
+                    "[bold]Details[/bold]",
+                    "",
+                    f"[bold]Name[/bold]       {s.slug}",
+                    f"[bold]Title[/bold]      {s.title or ''}",
+                    f"[bold]Branch[/bold]     {s.branch}",
+                    f"[bold]Upstream[/bold]   {s.upstream or '-'}",
+                    f"[bold]Tmux[/bold]       {s.tmux}",
+                    f"[bold]Session[/bold]    {session_name(self.root, s.slug)}",
+                    f"[bold]Path[/bold]       {s.path}",
+                    f"[bold]Dirty[/bold]      {s.dirty_count} file(s)",
+                    f"[bold]Unpushed[/bold]   {s.unpushed_count} commit(s)",
+                    "",
+                    "[bold]Recent[/bold]",
+                    f"  {s.last_commit or '-'}",
+                    "",
+                    "[dim]GitHub PR detection can land later via gh when available.[/dim]",
+                ]
+            )
+        )
+
+    def selected_result(self, action: str) -> TuiResult | None:
+        s = self.current_session()
+        if s is None:
+            self.bell()
+            return None
+        return TuiResult(action, s.slug)
+
+    def action_new(self) -> None:
+        self.exit(TuiResult("new"))
+
+    def action_resume(self) -> None:
+        result = self.selected_result("resume")
+        if result:
+            self.exit(result)
+
+    def action_status(self) -> None:
+        result = self.selected_result("status")
+        if result:
+            self.exit(result)
+
+    def action_remove(self) -> None:
+        result = self.selected_result("rm")
+        if result:
+            self.exit(result)
+
+    def action_kill(self) -> None:
+        result = self.selected_result("kill")
+        if result:
+            self.exit(result)
+
+    def action_prune(self) -> None:
+        self.exit(TuiResult("prune"))
+
+    def action_doctor(self) -> None:
+        self.exit(TuiResult("doctor"))
+
+    def action_focus_filter(self) -> None:
+        self.query_one("#filter", Input).focus()
+
+    def action_help(self) -> None:
+        def key(label: str) -> str:
+            return f"[bold]{escape(label)}[/bold]"
+
+        self.query_one("#details", Static).update(
+            "\n".join(
+                [
+                    "[bold]Keyboard[/bold]",
+                    "",
+                    f"{key('[n]')}      create a new session",
+                    f"{key('[enter]')}  resume selected session",
+                    f"{key('[s]')}      print selected session status",
+                    f"{key('[/]')}      focus the filter",
+                    f"{key('[x]')}      remove selected session, with confirmation",
+                    f"{key('[k]')}      kill selected tmux session, with confirmation",
+                    f"{key('[p]')}      preview prune, then optionally apply",
+                    f"{key('[d]')}      run doctor",
+                    f"{key('[q]')}      quit",
+                    "",
+                    "[dim]The TUI exits into the same command implementations used by the CLI, "
+                    "so safety checks stay shared.[/dim]",
+                ]
+            )
+        )
+
+
+def run_tui() -> None:
+    result = CwTui(repo_root()).run()
+    if result is None:
+        raise typer.Exit(0)
+    if result.action == "new":
+        interactive_new()
+    elif result.action == "resume" and result.slug:
+        resume(result.slug)
+    elif result.action == "status" and result.slug:
+        status(result.slug)
+    elif result.action == "rm" and result.slug:
+        if questionary.confirm(f"Remove {result.slug}?", default=False).ask():
+            rm(result.slug)
+    elif result.action == "kill" and result.slug:
+        if questionary.confirm(f"Kill tmux session for {result.slug}?", default=False).ask():
+            kill(result.slug)
+    elif result.action == "prune":
+        prune(False)
+        if questionary.confirm("Apply prune removals?", default=False).ask():
+            prune(True)
+    elif result.action == "doctor":
+        doctor()
+
+
+def interactive_new() -> None:
+    title = questionary.text("Title").ask()
+    if not title:
+        raise typer.Exit(0)
+    derived = slugify(title)
+    slug = questionary.text("Slug", default=derived).ask() or derived
+    branch = questionary.text("Branch override (blank for claude/<slug>)").ask() or None
+    base = questionary.text("Base ref (blank for latest origin/main)").ask() or None
+    mode = questionary.select(
+        "Permission mode",
+        choices=[
+            questionary.Choice("default", None),
+            "manual",
+            "accept",
+            "plan",
+            "auto",
+            "bypass",
+        ],
+    ).ask()
+    model = questionary.text("Model (blank for Claude default)").ask() or None
+    effort = questionary.select(
+        "Effort",
+        choices=[questionary.Choice("default", None), "low", "medium", "high", "xhigh", "max"],
+    ).ask()
+    native = questionary.confirm("Use native iTerm2 tmux integration?", default=False).ask()
+    rc = questionary.confirm("Enable Remote Control?", default=True).ask()
+    use_prompt = questionary.confirm("Inject session prompt if present?", default=True).ask()
+    new(
+        title=[title],
+        slug=slug,
+        branch=branch,
+        base=base,
+        mode=mode,
+        model=model,
+        effort=effort,
+        prompt_file=None,
+        no_prompt=not bool(use_prompt),
+        native=bool(native),
+        no_rc=not bool(rc),
+    )
+
+
+@app.callback()
+def main(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        run_tui()
+
+
+@app.command()
+def new(
+    title: Annotated[list[str], typer.Argument(help="Session display title.")],
+    slug: Annotated[Optional[str], typer.Option("--slug", help="Explicit worktree name.")] = None,
+    branch: Annotated[Optional[str], typer.Option("--branch", help="Branch name override.")] = None,
+    base: Annotated[Optional[str], typer.Option("--base", help="Base ref.")] = None,
+    mode: Annotated[Optional[str], typer.Option("--mode", help="Permission mode.")] = None,
+    model: Annotated[Optional[str], typer.Option("--model", help="Claude model.")] = None,
+    effort: Annotated[Optional[str], typer.Option("--effort", help="Reasoning effort.")] = None,
+    prompt_file: Annotated[
+        Optional[Path], typer.Option("--prompt-file", help="Session prompt template.")
+    ] = None,
+    no_prompt: Annotated[bool, typer.Option("--no-prompt", help="Skip session prompt.")] = False,
+    native: Annotated[bool, typer.Option("--native", help="Use native tmux integration.")] = False,
+    classic: Annotated[bool, typer.Option("--classic", help="Use classic tmux.")] = False,
+    no_rc: Annotated[bool, typer.Option("--no-rc", help="Launch without Remote Control.")] = False,
+) -> None:
+    del classic
+    require_cmd("claude")
+    require_cmd("tmux")
+    session_title = " ".join(title)
+    if not session_title:
+        raise CwError("usage: cw new <title> [--slug <name>] [--base <branch>] [--no-rc]")
+    slug = slug or slugify(session_title)
+    if not slug:
+        raise CwError(f"could not derive a name from title '{session_title}'; pass --slug <name>")
+    mode_value(mode)
+    validate_effort(effort)
+    branch_name = branch or f"{BRANCH_PREFIX}{slug}"
+    cp = run(["git", "check-ref-format", f"refs/heads/{branch_name}"], check=False, capture=True)
+    if cp.returncode != 0:
+        raise CwError(f"invalid branch name: {branch_name}")
+
+    root = repo_root()
+    repo = root.name
+    wt = WORKTREE_DIR / slug
+    sess = session_name(root, slug)
+    if tmux_alive(sess):
+        raise CwError(f"tmux session '{sess}' already exists; use 'cw resume {slug}'")
+    if (root / wt).exists():
+        raise CwError(f"worktree path already exists: {wt} (use 'cw resume {slug}')")
+    if base is None:
+        base = "origin/main"
+        info("fetching latest origin/main")
+        run(["git", "fetch", "origin", "main"], cwd=root)
+    info(f"creating worktree {wt} on branch {branch_name} (base: {base})")
+    info(f'  title: "{session_title}"  (slug: {slug})')
+    run(["git", "worktree", "add", str(wt), "-b", branch_name, base], cwd=root)
+    run(
+        ["git", "config", f"branch.{branch_name}.description", session_title],
+        cwd=root,
+        check=False,
+    )
+    args = claude_base_args(
+        slug=slug,
+        title=session_title,
+        native=native,
+        rc=not no_rc,
+        mode=mode,
+        model=model,
+        effort=effort,
+    )
+    info(f"launching: {' '.join(args)}")
+    append_prompt_arg(
+        args,
+        prompt_file=prompt_file,
+        no_prompt=no_prompt,
+        slug=slug,
+        branch=branch_name,
+        base=base,
+        title=session_title,
+        repo=repo,
+        wt=str(wt),
+    )
+    execvp(args)
+
+
+@app.command()
+def resume(
+    name: Annotated[str, typer.Argument(help="Worktree session slug.")],
+    fresh: Annotated[bool, typer.Option("--fresh", help="Start a new conversation.")] = False,
+    pick: Annotated[bool, typer.Option("--pick", "-r", help="Open Claude's session picker.")] = False,
+    mode: Annotated[Optional[str], typer.Option("--mode", help="Permission mode.")] = None,
+    model: Annotated[Optional[str], typer.Option("--model", help="Claude model.")] = None,
+    effort: Annotated[Optional[str], typer.Option("--effort", help="Reasoning effort.")] = None,
+    prompt_file: Annotated[
+        Optional[Path], typer.Option("--prompt-file", help="Session prompt template.")
+    ] = None,
+    no_prompt: Annotated[bool, typer.Option("--no-prompt", help="Skip session prompt.")] = False,
+    native: Annotated[bool, typer.Option("--native", help="Use native tmux integration.")] = False,
+    classic: Annotated[bool, typer.Option("--classic", help="Use classic tmux.")] = False,
+    no_rc: Annotated[bool, typer.Option("--no-rc", help="Relaunch without Remote Control.")] = False,
+) -> None:
+    del classic
+    if fresh and pick:
+        raise CwError("--fresh and --pick are mutually exclusive")
+    require_cmd("tmux")
+    mode_value(mode)
+    validate_effort(effort)
+    root = repo_root()
+    sess = session_name(root, name)
+    if tmux_alive(sess):
+        if fresh or pick or mode:
+            info("session is live; attaching (--fresh/--pick/--mode ignored)")
+        execvp(["tmux", "attach-session", "-t", f"={sess}"])
+    wt = WORKTREE_DIR / name
+    if not (root / wt).is_dir():
+        raise CwError(f"no tmux session and no worktree named '{name}' (looked in {wt})")
+    require_cmd("claude")
+    branch = worktree_branch(root, name)
+    title = branch_description(root, branch) or display_name(root, name)
+    info(f"no live tmux session; relaunching claude on existing worktree {wt}")
+    args = claude_base_args(
+        slug=name,
+        title=title,
+        native=native,
+        rc=not no_rc,
+        mode=mode,
+        model=model,
+        effort=effort,
+    )
+    if pick:
+        args.append("--resume")
+    elif not fresh:
+        args.append("--continue")
+    info(f"launching: {' '.join(args)}")
+    upstream = git(root, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}", check=False).strip()
+    base = upstream or "origin/main"
+    append_prompt_arg(
+        args,
+        prompt_file=prompt_file,
+        no_prompt=no_prompt,
+        slug=name,
+        branch=branch,
+        base=base,
+        title=title,
+        repo=root.name,
+        wt=str(wt),
+    )
+    execvp(args)
+
+
+@app.command("list")
+def list_cmd() -> None:
+    print_sessions(list_sessions(repo_root()))
+
+
+@app.command("ls")
+def ls_cmd() -> None:
+    list_cmd()
+
+
+@app.command()
+def status(name: Annotated[str, typer.Argument(help="Worktree session slug.")]) -> None:
+    root = repo_root()
+    wt = root / WORKTREE_DIR / name
+    if not wt.is_dir():
+        raise CwError(f"no worktree named '{name}' (looked in {WORKTREE_DIR / name})")
+    branch = worktree_branch(root, name)
+    dirty = git(wt, "status", "--porcelain", check=False).strip()
+    unpushed = "0"
+    if branch and branch != "(detached)":
+        unpushed = git(root, "rev-list", "--count", branch, "--not", "--remotes", check=False).strip()
+    table = Table(show_header=False)
+    table.add_column("Key", style="bold")
+    table.add_column("Value")
+    table.add_row("Name", name)
+    table.add_row("Path", str(WORKTREE_DIR / name))
+    table.add_row("Branch", branch or "")
+    table.add_row("Title", branch_description(root, branch))
+    table.add_row("Tmux", tmux_status(session_name(root, name)))
+    table.add_row("Dirty", "yes" if dirty else "no")
+    table.add_row("Unpushed", unpushed or "0")
+    out.print(table)
+
+
+@app.command()
+def rm(
+    name: Annotated[str, typer.Argument(help="Worktree session slug.")],
+    force: Annotated[bool, typer.Option("--force", "-f", help="Remove despite dirty state.")] = False,
+) -> None:
+    root = repo_root()
+    wt = WORKTREE_DIR / name
+    abs_wt = root / wt
+    if not abs_wt.is_dir():
+        raise CwError(f"no worktree named '{name}' (looked in {wt})")
+    branch = worktree_branch(root, name)
+    if not force:
+        if git(abs_wt, "status", "--porcelain", check=False).strip():
+            raise CwError(f"worktree '{name}' has uncommitted changes; commit them or use 'cw rm {name} --force'")
+        if branch:
+            unpushed = git(root, "rev-list", "--count", branch, "--not", "--remotes", check=False).strip()
+            if int(unpushed or "0") > 0:
+                raise CwError(
+                    f"branch '{branch}' has {unpushed} commit(s) not on any remote; "
+                    f"push them or use 'cw rm {name} --force'"
+                )
+    sess = session_name(root, name)
+    if tmux_alive(sess):
+        info(f"killing tmux session '{sess}'")
+        run(["tmux", "kill-session", "-t", f"={sess}"])
+    info(f"removing worktree {wt}")
+    args = ["git", "worktree", "remove"]
+    if force:
+        args.append("--force")
+    args.append(str(wt))
+    run(args, cwd=root)
+    if branch and run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=root, check=False).returncode == 0:
+        info(f"deleting branch {branch}")
+        run(["git", "branch", "-D", branch], cwd=root)
+    else:
+        suffix = f" ({branch} not found)" if branch else ""
+        info(f"no backing branch to delete{suffix}")
+
+
+@app.command("remove")
+def remove_cmd(
+    name: Annotated[str, typer.Argument(help="Worktree session slug.")],
+    force: Annotated[bool, typer.Option("--force", "-f", help="Remove despite dirty state.")] = False,
+) -> None:
+    rm(name, force)
+
+
+@app.command()
+def kill(name: Annotated[str, typer.Argument(help="Worktree session slug.")]) -> None:
+    root = repo_root()
+    sess = session_name(root, name)
+    if tmux_alive(sess):
+        run(["tmux", "kill-session", "-t", f"={sess}"])
+        info(f"killed tmux session '{sess}' (worktree and branch left intact)")
+    else:
+        raise CwError(f"no tmux session named '{sess}'")
+
+
+@app.command()
+def prune(
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Apply removals.")] = False,
+) -> None:
+    root = repo_root()
+    repo = root.name
+    sessions = list_sessions(root)
+    if yes:
+        info("prune: applying - removing eligible worktrees + branches")
+    else:
+        info("prune: dry run - nothing removed (pass --yes to apply)")
+    removable = 0
+    kept = 0
+    for s in sessions:
+        wt = root / WORKTREE_DIR / s.slug
+        if tmux_alive(session_name(root, s.slug)):
+            out.print(f"  keep    {s.slug:<22} session alive ({s.tmux})")
+            kept += 1
+            continue
+        if git(wt, "status", "--porcelain", check=False).strip():
+            out.print(f"  keep    {s.slug:<22} uncommitted changes")
+            kept += 1
+            continue
+        unpushed = 0
+        if s.branch and s.branch != "(detached)":
+            unpushed = int(git(root, "rev-list", "--count", s.branch, "--not", "--remotes", check=False).strip() or "0")
+        if unpushed > 0:
+            out.print(f"  keep    {s.slug:<22} {unpushed} unpushed commit(s) on {s.branch}")
+            kept += 1
+            continue
+        removable += 1
+        if yes:
+            out.print(f"  remove  {s.slug:<22} ({s.branch})")
+            cp = run(["git", "worktree", "remove", str(WORKTREE_DIR / s.slug)], cwd=root, check=False)
+            if cp.returncode == 0 and s.branch and s.branch != "(detached)":
+                if run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{s.branch}"], cwd=root, check=False).returncode == 0:
+                    run(["git", "branch", "-D", s.branch], cwd=root, check=False, capture=True)
+            elif cp.returncode != 0:
+                out.print(f"  (failed to remove {s.slug} - skipped)")
+                removable -= 1
+                kept += 1
+        else:
+            out.print(f"  would remove {s.slug:<18} ({s.branch})")
+    run(["git", "worktree", "prune"], cwd=root, check=False)
+    sigs = run(["tmux", "ls", "-F", "#{session_name}\t#{session_attached}"], check=False, capture=True)
+    lines = [line for line in (sigs.stdout or "").splitlines() if "_worktree-" in line]
+    if lines:
+        out.print("\nClaude worktree tmux sessions on this machine (kill by hand if stale):")
+        for line in lines:
+            session, attached = line.split("\t", 1)
+            scope = "this-repo" if session.startswith(f"{repo}_worktree-") else "other-repo"
+            state = "attached" if attached.isdigit() and int(attached) > 0 else "detached"
+            out.print(f"  {session:<42} {state:<9} {scope}")
+    if yes:
+        info(f"prune: removed {removable}, kept {kept}")
+    else:
+        info(f"prune: {removable} removable, {kept} kept - pass --yes to apply")
+
+
+@app.command()
+def doctor() -> None:
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Check")
+    table.add_column("Result")
+    for cmd in ["git", "tmux", "claude", "uv"]:
+        table.add_row(cmd, shutil.which(cmd) or "missing")
+    prompt = default_prompt_path(None)
+    table.add_row("prompt", str(prompt) if prompt.is_file() else f"missing: {prompt}")
+    excludes = run(["git", "config", "--global", "--get", "core.excludesFile"], check=False, capture=True)
+    excludes_path = (excludes.stdout or "").strip()
+    ignore_ok = "unknown"
+    if excludes_path:
+        ignore_file = Path(excludes_path.replace("~", str(Path.home()), 1))
+        if ignore_file.is_file():
+            ignore_ok = "yes" if ".claude/worktrees/" in ignore_file.read_text() else "missing .claude/worktrees/"
+    table.add_row("global ignore", ignore_ok)
+    table.add_row("cw on PATH", shutil.which("cw") or "missing")
+    out.print(table)
+
+
+def entrypoint() -> int | None:
+    try:
+        app()
+    except CwError as exc:
+        console.print(f"cw: {exc}")
+        return 1
+    return None
+
+
+if __name__ == "__main__":
+    entrypoint()
