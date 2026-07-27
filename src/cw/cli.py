@@ -434,6 +434,9 @@ def state_text(value: str) -> Text:
 
 
 class CwTui(App[TuiResult | None]):
+    TITLE = "cw"
+    SUB_TITLE = "Claude worktrees"
+
     CSS = """
     Screen {
         background: #101418;
@@ -467,13 +470,13 @@ class CwTui(App[TuiResult | None]):
     }
 
     #sessions {
-        width: 60%;
+        width: 65%;
         height: 100%;
         border-right: solid #334155;
     }
 
     #details {
-        width: 40%;
+        width: 35%;
         height: 100%;
         padding: 1 2;
         overflow-y: auto;
@@ -509,7 +512,7 @@ class CwTui(App[TuiResult | None]):
         self.visible_sessions: list[WorktreeSession] = []
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield Header(show_clock=True, icon="")
         with Vertical(id="top"):
             yield Static(f"Repo  {self.root}", id="repo")
             yield Static(f"Worktrees  {WORKTREE_DIR}", id="worktrees")
@@ -524,7 +527,7 @@ class CwTui(App[TuiResult | None]):
             ),
             id="actions",
         )
-        yield Footer()
+        yield Footer(show_command_palette=False)
 
     def on_mount(self) -> None:
         table = self.query_one("#sessions", DataTable)
@@ -588,6 +591,12 @@ class CwTui(App[TuiResult | None]):
                 "Use [n] to create a session or [/] to change the filter."
             )
             return
+        display_path = s.path
+        if s.path.is_absolute():
+            try:
+                display_path = s.path.relative_to(self.root)
+            except ValueError:
+                display_path = s.path
         details.update(
             "\n".join(
                 [
@@ -599,7 +608,7 @@ class CwTui(App[TuiResult | None]):
                     f"[bold]Upstream[/bold]   {s.upstream or '-'}",
                     f"[bold]Tmux[/bold]       {s.tmux}",
                     f"[bold]Session[/bold]    {session_name(self.root, s.slug)}",
-                    f"[bold]Path[/bold]       {s.path}",
+                    f"[bold]Path[/bold]       {display_path}",
                     f"[bold]Dirty[/bold]      {s.dirty_count} file(s)",
                     f"[bold]Unpushed[/bold]   {s.unpushed_count} commit(s)",
                     "",
