@@ -360,6 +360,11 @@ def execvp(args: list[str]) -> None:
     os.execvp(args[0], args)
 
 
+def exec_from(root: Path, args: list[str]) -> None:
+    os.chdir(root)
+    execvp(args)
+
+
 def list_sessions(root: Path) -> list[WorktreeSession]:
     sessions = []
     for path, branch in parse_worktrees_porcelain(git(root, "worktree", "list", "--porcelain")):
@@ -817,7 +822,7 @@ def new(
         repo=repo,
         wt=str(wt),
     )
-    execvp(args)
+    exec_from(root, args)
 
 
 @app.command()
@@ -847,7 +852,7 @@ def resume(
     if tmux_alive(sess):
         if fresh or pick or mode:
             info("session is live; attaching (--fresh/--pick/--mode ignored)")
-        execvp(["tmux", "attach-session", "-t", f"={sess}"])
+        exec_from(root, ["tmux", "attach-session", "-t", f"={sess}"])
     wt = WORKTREE_DIR / name
     if not (root / wt).is_dir():
         raise CwError(f"no tmux session and no worktree named '{name}' (looked in {wt})")
@@ -882,7 +887,7 @@ def resume(
         repo=root.name,
         wt=str(wt),
     )
-    execvp(args)
+    exec_from(root, args)
 
 
 @app.command("list")
@@ -1062,6 +1067,8 @@ def entrypoint() -> int | None:
         app()
     except CwError as exc:
         console.print(f"cw: {exc}")
+        return 1
+    except subprocess.CalledProcessError:
         return 1
     return None
 

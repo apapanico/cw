@@ -8,6 +8,7 @@ from cw.cli import (
     claude_base_args,
     default_choice,
     display_name,
+    exec_from,
     map_mode,
     parse_worktrees_porcelain,
     render_prompt_text,
@@ -138,3 +139,23 @@ def test_default_choice_normalizes_prompt_defaults():
     assert default_choice("") is None
     assert default_choice("default") is None
     assert default_choice("accept") == "accept"
+
+
+def test_exec_from_changes_to_repo_root_before_exec(monkeypatch):
+    calls = {}
+
+    def fake_chdir(path):
+        calls["cwd"] = path
+
+    def fake_execvp(args):
+        calls["args"] = args
+
+    monkeypatch.setattr("cw.cli.os.chdir", fake_chdir)
+    monkeypatch.setattr("cw.cli.execvp", fake_execvp)
+
+    exec_from(Path("/repo"), ["claude", "--worktree", "demo"])
+
+    assert calls == {
+        "cwd": Path("/repo"),
+        "args": ["claude", "--worktree", "demo"],
+    }
