@@ -145,6 +145,10 @@ def validate_effort(effort: str | None) -> str:
     return value
 
 
+def default_choice(value: str | None) -> str | None:
+    return None if value in {None, "", "default"} else value
+
+
 def tmux_alive(session: str) -> bool:
     if shutil.which("tmux") is None:
         return False
@@ -702,7 +706,7 @@ def interactive_new() -> None:
     mode = questionary.select(
         "Permission mode",
         choices=[
-            questionary.Choice("default", None),
+            questionary.Choice("default", value=None),
             "manual",
             "accept",
             "plan",
@@ -713,7 +717,7 @@ def interactive_new() -> None:
     model = questionary.text("Model (blank for Claude default)").ask() or None
     effort = questionary.select(
         "Effort",
-        choices=[questionary.Choice("default", None), "low", "medium", "high", "xhigh", "max"],
+        choices=[questionary.Choice("default", value=None), "low", "medium", "high", "xhigh", "max"],
     ).ask()
     native = questionary.confirm("Use native iTerm2 tmux integration?", default=False).ask()
     rc = questionary.confirm("Enable Remote Control?", default=True).ask()
@@ -723,9 +727,9 @@ def interactive_new() -> None:
         slug=slug,
         branch=branch,
         base=base,
-        mode=mode,
+        mode=default_choice(mode),
         model=model,
-        effort=effort,
+        effort=default_choice(effort),
         prompt_file=None,
         no_prompt=not bool(use_prompt),
         native=bool(native),

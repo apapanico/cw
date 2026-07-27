@@ -6,6 +6,7 @@ from cw.cli import (
     ModeError,
     WorktreeSession,
     claude_base_args,
+    default_choice,
     display_name,
     map_mode,
     parse_worktrees_porcelain,
@@ -130,3 +131,10 @@ def test_session_state_labels():
     assert session_state(WorktreeSession(**base, dirty_count=2)) == "dirty"
     assert session_state(WorktreeSession(**base, unpushed_count=1)) == "unpushed"
     assert session_state(WorktreeSession(**base, dirty_count=2, unpushed_count=1)) == "dirty+unpushed"
+
+
+def test_default_choice_normalizes_prompt_defaults():
+    assert default_choice(None) is None
+    assert default_choice("") is None
+    assert default_choice("default") is None
+    assert default_choice("accept") == "accept"
