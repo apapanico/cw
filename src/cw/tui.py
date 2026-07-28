@@ -9,7 +9,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, RichLog, Select, Static
+from textual.widgets import Checkbox, DataTable, Footer, Header, Input, Label, RichLog, Select, Static
 
 from .models import BRANCH_PREFIX, WORKTREE_DIR, NewSessionOptions, PruneRow, ResumeOptions, TuiResult, WorktreeSession, CwError
 from .operations import (
@@ -364,14 +364,10 @@ class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
         color: #cbd5e1;
     }
 
-    #resume-buttons {
-        height: 3;
+    #resume-actions {
+        height: 1;
         margin-top: 1;
-        align-horizontal: right;
-    }
-
-    Button {
-        margin-left: 1;
+        color: #cbd5e1;
     }
     """
 
@@ -442,18 +438,10 @@ class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
             with Horizontal(classes="resume-row"):
                 yield Checkbox("Remote Control", value=True, compact=True, id="resume-rc")
                 yield Checkbox("session prompt", value=True, compact=True, id="resume-prompt")
-            with Horizontal(id="resume-buttons"):
-                yield Button("Cancel", id="resume-cancel")
-                yield Button("Launch", variant="primary", id="resume-launch")
+            yield Static(Text("[enter] launch  [esc] back"), id="resume-actions")
 
     def on_mount(self) -> None:
         self.query_one("#resume-conversation", Select).focus()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "resume-cancel":
-            self.dismiss(None)
-        elif event.button.id == "resume-launch":
-            self.launch()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -688,14 +676,10 @@ class DoctorScreen(ModalScreen[None]):
         color: #cbd5e1;
     }
 
-    #doctor-buttons {
-        height: 3;
+    #doctor-actions {
+        height: 1;
         margin-top: 1;
-        align-horizontal: right;
-    }
-
-    Button {
-        margin-left: 1;
+        color: #cbd5e1;
     }
     """
 
@@ -708,9 +692,7 @@ class DoctorScreen(ModalScreen[None]):
         with Container(id="doctor-dialog"):
             yield Static("Doctor", id="doctor-title")
             yield Static("", id="doctor-body")
-            with Horizontal(id="doctor-buttons"):
-                yield Button("Refresh", id="doctor-refresh")
-                yield Button("Back", variant="primary", id="doctor-back")
+            yield Static(Text("[r] refresh  [esc] back"), id="doctor-actions")
 
     def on_mount(self) -> None:
         self.refresh_doctor()
@@ -720,18 +702,10 @@ class DoctorScreen(ModalScreen[None]):
         for name, result in doctor_rows():
             style = "green" if result and not result.startswith(("missing", "unknown")) else "yellow"
             lines.append(f"[bold]{name:<14}[/bold] [{style}]{escape(result)}[/{style}]")
-        lines.append("")
-        lines.append("[dim][r] refresh  [esc] back[/dim]")
         return "\n".join(lines)
 
     def refresh_doctor(self) -> None:
         self.query_one("#doctor-body", Static).update(self.body_text())
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "doctor-refresh":
-            self.refresh_doctor()
-        elif event.button.id == "doctor-back":
-            self.dismiss(None)
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -767,14 +741,10 @@ class StatusScreen(ModalScreen[str | None]):
         color: #cbd5e1;
     }
 
-    #status-buttons {
-        height: 3;
+    #status-actions {
+        height: 1;
         margin-top: 1;
-        align-horizontal: right;
-    }
-
-    Button {
-        margin-left: 1;
+        color: #cbd5e1;
     }
     """
 
@@ -792,9 +762,7 @@ class StatusScreen(ModalScreen[str | None]):
         with Container(id="status-dialog"):
             yield Static(f"Status {self.session.slug}", id="status-title")
             yield Static(self.body_text(), id="status-body")
-            with Horizontal(id="status-buttons"):
-                yield Button("Back", id="status-back")
-                yield Button("Resume", variant="primary", id="status-resume")
+            yield Static(Text("[enter] resume  [esc] back"), id="status-actions")
 
     def display_path(self) -> Path:
         if self.session.path.is_absolute():
@@ -823,16 +791,8 @@ class StatusScreen(ModalScreen[str | None]):
                 "  PR      -",
                 "  Linear  -",
                 "  Jira    -",
-                "",
-                "[dim][enter] resume  [esc] back[/dim]",
             ]
         )
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "status-back":
-            self.dismiss(None)
-        elif event.button.id == "status-resume":
-            self.dismiss("resume")
 
     def action_close(self) -> None:
         self.dismiss(None)

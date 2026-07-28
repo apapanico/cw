@@ -140,6 +140,12 @@ def test_default_choice_normalizes_prompt_defaults():
     assert default_choice("accept") == "accept"
 
 
+def test_tui_uses_keyboard_command_footers_not_buttons():
+    source = (Path.cwd() / "src/cw/tui.py").read_text()
+    assert "Button" not in source
+    assert "on_button_pressed" not in source
+
+
 def test_exec_from_changes_to_repo_root_before_exec(monkeypatch):
     calls = {}
 
@@ -391,6 +397,7 @@ def test_tui_doctor_modal_stays_in_dashboard():
     import asyncio
 
     from cw.tui import CwTui
+    from textual.widgets import Button, Static
 
     async def run_doctor_test():
         app = CwTui(Path.cwd())
@@ -398,6 +405,8 @@ def test_tui_doctor_modal_stays_in_dashboard():
             await pilot.press("d")
             await pilot.pause()
             assert type(app.screen).__name__ == "DoctorScreen"
+            assert not list(app.screen.query(Button))
+            assert app.screen.query_one("#doctor-actions", Static)
             await pilot.press("escape")
             await pilot.pause()
             assert type(app.screen).__name__ == "Screen"
@@ -411,6 +420,7 @@ def test_tui_status_modal_stays_in_dashboard():
 
     from cw.models import WorktreeSession
     from cw.tui import CwTui
+    from textual.widgets import Button, Static
 
     async def run_status_test():
         app = CwTui(Path.cwd())
@@ -428,6 +438,8 @@ def test_tui_status_modal_stays_in_dashboard():
             await pilot.press("s")
             await pilot.pause()
             assert type(app.screen).__name__ == "StatusScreen"
+            assert not list(app.screen.query(Button))
+            assert app.screen.query_one("#status-actions", Static)
             await pilot.press("escape")
             await pilot.pause()
             assert type(app.screen).__name__ == "Screen"
