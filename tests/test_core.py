@@ -367,7 +367,7 @@ def test_tui_prune_modal_stays_in_dashboard():
     import asyncio
 
     from cw.cli import CwTui
-    from textual.widgets import Button, Static
+    from textual.widgets import Button, DataTable, RichLog, Static
 
     async def run_prune_test():
         app = CwTui(Path.cwd())
@@ -376,6 +376,9 @@ def test_tui_prune_modal_stays_in_dashboard():
             await pilot.pause()
             assert type(app.screen).__name__ == "PruneScreen"
             assert not list(app.screen.query(Button))
+            assert not list(app.screen.query(RichLog))
+            assert app.screen.query_one("#prune-remove-table", DataTable)
+            assert app.screen.query_one("#prune-keep-table", DataTable)
             assert app.screen.query_one("#prune-actions", Static)
             await pilot.press("escape")
             await pilot.pause()
