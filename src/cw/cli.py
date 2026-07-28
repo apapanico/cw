@@ -71,10 +71,22 @@ class NewSessionOptions:
 
 
 @dataclass(frozen=True)
+class ResumeOptions:
+    fresh: bool = False
+    pick: bool = False
+    mode: str | None = None
+    model: str | None = None
+    effort: str | None = None
+    rc: bool = True
+    prompt: bool = True
+
+
+@dataclass(frozen=True)
 class TuiResult:
     action: str
     slug: str | None = None
     new_options: NewSessionOptions | None = None
+    resume_options: ResumeOptions | None = None
 
 
 def info(message: str) -> None:
@@ -456,38 +468,60 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
     }
 
     #new-dialog {
-        width: 78;
+        width: 96;
         max-width: 96%;
         height: auto;
         padding: 1 2;
-        border: thick #38bdf8;
+        border: solid #38bdf8;
         background: #111827;
     }
 
     #new-title {
         height: 1;
-        margin-bottom: 1;
+        margin-bottom: 0;
         color: #e2e8f0;
         text-style: bold;
     }
 
+    .form-row {
+        height: 3;
+        margin-top: 0;
+    }
+
+    .form-cell {
+        width: 1fr;
+        height: 3;
+        margin-right: 1;
+    }
+
     .field-label {
         height: 1;
-        margin-top: 1;
+        margin-top: 0;
         color: #94a3b8;
+    }
+
+    Input, Select {
+        height: 1;
     }
 
     .toggle-row {
         height: auto;
-        margin-top: 1;
+        margin-top: 0;
     }
 
     #new-preview {
-        min-height: 4;
+        min-height: 3;
         margin-top: 1;
         padding: 1;
         border: solid #334155;
         color: #cbd5e1;
+    }
+
+    #new-branch-preview {
+        height: 1;
+        padding: 0 1;
+        background: #1f2937;
+        color: #e5e7eb;
     }
 
     #new-error {
@@ -509,6 +543,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "cancel"),
+        Binding("enter", "create", "create", priority=True),
         Binding("ctrl+s", "create", "create"),
     ]
 
@@ -519,48 +554,70 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
     def compose(self) -> ComposeResult:
         with Container(id="new-dialog"):
             yield Static("New session", id="new-title")
-            yield Label("Title", classes="field-label")
-            yield Input(placeholder="Demo cw", id="new-session-title")
-            yield Label("Slug", classes="field-label")
-            yield Input(placeholder="auto from title", id="new-slug")
-            yield Label("Branch override", classes="field-label")
-            yield Input(placeholder="blank => claude/<slug>", id="new-branch")
-            yield Label("Base ref", classes="field-label")
-            yield Input(placeholder="blank => fetch latest origin/main", id="new-base")
-            yield Label("Permission mode", classes="field-label")
-            yield Select(
-                [
-                    ("default", "default"),
-                    ("manual", "manual"),
-                    ("accept", "accept"),
-                    ("plan", "plan"),
-                    ("auto", "auto"),
-                    ("bypass", "bypass"),
-                ],
-                value="default",
-                allow_blank=False,
-                id="new-mode",
-            )
-            yield Label("Model", classes="field-label")
-            yield Input(placeholder="blank => Claude default", id="new-model")
-            yield Label("Effort", classes="field-label")
-            yield Select(
-                [
-                    ("default", "default"),
-                    ("low", "low"),
-                    ("medium", "medium"),
-                    ("high", "high"),
-                    ("xhigh", "xhigh"),
-                    ("max", "max"),
-                ],
-                value="default",
-                allow_blank=False,
-                id="new-effort",
-            )
-            with Horizontal(classes="toggle-row"):
-                yield Checkbox("classic tmux", value=True, id="new-classic")
-                yield Checkbox("Remote Control", value=True, id="new-rc")
-                yield Checkbox("session prompt", value=True, id="new-prompt")
+            with Horizontal(classes="form-row"):
+                with Vertical(classes="form-cell"):
+                    yield Label("Title", classes="field-label")
+                    yield Input(placeholder="Demo cw", compact=True, id="new-session-title")
+                with Vertical(classes="form-cell"):
+                    yield Label("Slug", classes="field-label")
+                    yield Input(placeholder="auto from title", compact=True, id="new-slug")
+            with Horizontal(classes="form-row"):
+                with Vertical(classes="form-cell"):
+                    yield Label("Branch override", classes="field-label")
+                    yield Input(placeholder="optional branch name", compact=True, id="new-branch")
+                with Vertical(classes="form-cell"):
+                    yield Label("Branch", classes="field-label")
+                    yield Static("claude/<slug>", id="new-branch-preview")
+            with Horizontal(classes="form-row"):
+                with Vertical(classes="form-cell"):
+                    yield Label("Base ref", classes="field-label")
+                    yield Input(value="origin/main", compact=True, id="new-base")
+                with Vertical(classes="form-cell"):
+                    yield Label("Fetch base", classes="field-label")
+                    yield Static("yes for origin/main; custom refs skip fetch", id="new-fetch-preview")
+            with Horizontal(classes="form-row"):
+                with Vertical(classes="form-cell"):
+                    yield Label("Permission mode", classes="field-label")
+                    yield Select(
+                        [
+                            ("default", "default"),
+                            ("manual", "manual"),
+                            ("accept", "accept"),
+                            ("plan", "plan"),
+                            ("auto", "auto"),
+                            ("bypass", "bypass"),
+                        ],
+                        value="default",
+                        allow_blank=False,
+                        compact=True,
+                        id="new-mode",
+                    )
+                with Vertical(classes="form-cell"):
+                    yield Label("Model", classes="field-label")
+                    yield Input(placeholder="blank => Claude default", compact=True, id="new-model")
+            with Horizontal(classes="form-row"):
+                with Vertical(classes="form-cell"):
+                    yield Label("Effort", classes="field-label")
+                    yield Select(
+                        [
+                            ("default", "default"),
+                            ("low", "low"),
+                            ("medium", "medium"),
+                            ("high", "high"),
+                            ("xhigh", "xhigh"),
+                            ("max", "max"),
+                        ],
+                        value="default",
+                        allow_blank=False,
+                        compact=True,
+                        id="new-effort",
+                    )
+                with Vertical(classes="form-cell"):
+                    yield Label("Launch", classes="field-label")
+                    with Horizontal(classes="toggle-row"):
+                        yield Checkbox("classic tmux", value=True, compact=True, id="new-classic")
+                        yield Checkbox("Remote Control", value=True, compact=True, id="new-rc")
+                        yield Checkbox("prompt", value=True, compact=True, id="new-prompt")
             yield Static("", id="new-preview")
             yield Static("", id="new-error")
             with Horizontal(id="new-buttons"):
@@ -579,6 +636,9 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
                 slug_input.value = derived
             self.auto_slug = derived
         self.update_preview()
+
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        self.create()
 
     def on_select_changed(self, _: Select.Changed) -> None:
         self.update_preview()
@@ -602,7 +662,8 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
         title = self.query_one("#new-session-title", Input).value.strip()
         slug = self.query_one("#new-slug", Input).value.strip() or None
         branch = self.query_one("#new-branch", Input).value.strip() or None
-        base = self.query_one("#new-base", Input).value.strip() or None
+        base_value = self.query_one("#new-base", Input).value.strip()
+        base = None if base_value in {"", "origin/main"} else base_value
         mode = str(self.query_one("#new-mode", Select).value)
         model = self.query_one("#new-model", Input).value.strip() or None
         effort = str(self.query_one("#new-effort", Select).value)
@@ -639,7 +700,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
         options = self.values()
         slug = options.slug or slugify(options.title) or "<slug>"
         branch = options.branch or f"{BRANCH_PREFIX}{slug}"
-        base = options.base or "latest origin/main"
+        base = options.base or "origin/main (fetch first)"
         tmux = "--tmux" if options.native else "--tmux=classic"
         extras = []
         if options.mode:
@@ -659,7 +720,165 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
             f"[bold]launch[/bold]  claude --worktree {slug} {tmux} --name {options.title or '<title>'} "
             f"{' '.join(extras)}".rstrip(),
         ]
+        self.query_one("#new-branch-preview", Static).update(branch)
         self.query_one("#new-preview", Static).update("\n".join(preview))
+
+
+class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
+    CSS = """
+    ResumeSessionScreen {
+        align: center middle;
+    }
+
+    #resume-dialog {
+        width: 76;
+        max-width: 94%;
+        height: auto;
+        padding: 1 2;
+        border: solid #f59e0b;
+        background: #111827;
+    }
+
+    #resume-title {
+        height: 1;
+        margin-bottom: 1;
+        color: #e2e8f0;
+        text-style: bold;
+    }
+
+    .resume-row {
+        height: 3;
+    }
+
+    .resume-cell {
+        width: 1fr;
+        height: 3;
+        margin-right: 1;
+    }
+
+    .resume-label {
+        height: 1;
+        color: #94a3b8;
+    }
+
+    #resume-note {
+        min-height: 2;
+        color: #cbd5e1;
+    }
+
+    #resume-buttons {
+        height: 3;
+        margin-top: 1;
+        align-horizontal: right;
+    }
+
+    Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel"),
+        Binding("enter", "launch", "launch", priority=True),
+    ]
+
+    def __init__(self, session: WorktreeSession) -> None:
+        super().__init__()
+        self.session = session
+
+    def compose(self) -> ComposeResult:
+        with Container(id="resume-dialog"):
+            yield Static(f"Resume {self.session.slug}", id="resume-title")
+            yield Static("No live tmux session exists. Relaunch Claude on this worktree.", id="resume-note")
+            with Horizontal(classes="resume-row"):
+                with Vertical(classes="resume-cell"):
+                    yield Label("Conversation", classes="resume-label")
+                    yield Select(
+                        [
+                            ("continue previous conversation", "continue"),
+                            ("fresh conversation", "fresh"),
+                            ("open Claude picker", "pick"),
+                        ],
+                        value="continue",
+                        allow_blank=False,
+                        compact=True,
+                        id="resume-conversation",
+                    )
+                with Vertical(classes="resume-cell"):
+                    yield Label("Permission mode", classes="resume-label")
+                    yield Select(
+                        [
+                            ("default", "default"),
+                            ("manual", "manual"),
+                            ("accept", "accept"),
+                            ("plan", "plan"),
+                            ("auto", "auto"),
+                            ("bypass", "bypass"),
+                        ],
+                        value="default",
+                        allow_blank=False,
+                        compact=True,
+                        id="resume-mode",
+                    )
+            with Horizontal(classes="resume-row"):
+                with Vertical(classes="resume-cell"):
+                    yield Label("Model", classes="resume-label")
+                    yield Input(placeholder="blank => Claude default", compact=True, id="resume-model")
+                with Vertical(classes="resume-cell"):
+                    yield Label("Effort", classes="resume-label")
+                    yield Select(
+                        [
+                            ("default", "default"),
+                            ("low", "low"),
+                            ("medium", "medium"),
+                            ("high", "high"),
+                            ("xhigh", "xhigh"),
+                            ("max", "max"),
+                        ],
+                        value="default",
+                        allow_blank=False,
+                        compact=True,
+                        id="resume-effort",
+                    )
+            with Horizontal(classes="resume-row"):
+                yield Checkbox("Remote Control", value=True, compact=True, id="resume-rc")
+                yield Checkbox("session prompt", value=True, compact=True, id="resume-prompt")
+            with Horizontal(id="resume-buttons"):
+                yield Button("Cancel", id="resume-cancel")
+                yield Button("Launch", variant="primary", id="resume-launch")
+
+    def on_mount(self) -> None:
+        self.query_one("#resume-conversation", Select).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "resume-cancel":
+            self.dismiss(None)
+        elif event.button.id == "resume-launch":
+            self.launch()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_launch(self) -> None:
+        self.launch()
+
+    def values(self) -> ResumeOptions:
+        conversation = str(self.query_one("#resume-conversation", Select).value)
+        mode = str(self.query_one("#resume-mode", Select).value)
+        model = self.query_one("#resume-model", Input).value.strip() or None
+        effort = str(self.query_one("#resume-effort", Select).value)
+        return ResumeOptions(
+            fresh=conversation == "fresh",
+            pick=conversation == "pick",
+            mode=default_choice(mode),
+            model=model,
+            effort=default_choice(effort),
+            rc=self.query_one("#resume-rc", Checkbox).value,
+            prompt=self.query_one("#resume-prompt", Checkbox).value,
+        )
+
+    def launch(self) -> None:
+        self.dismiss(self.values())
 
 
 class CwTui(App[TuiResult | None]):
@@ -803,6 +1022,9 @@ class CwTui(App[TuiResult | None]):
     def on_data_table_row_highlighted(self, _: DataTable.RowHighlighted) -> None:
         self.update_details()
 
+    def on_data_table_row_selected(self, _: DataTable.RowSelected) -> None:
+        self.action_resume()
+
     def current_session(self) -> WorktreeSession | None:
         table = self.query_one("#sessions", DataTable)
         row = table.cursor_row
@@ -864,9 +1086,18 @@ class CwTui(App[TuiResult | None]):
             self.exit(TuiResult("new", new_options=options))
 
     def action_resume(self) -> None:
-        result = self.selected_result("resume")
-        if result:
-            self.exit(result)
+        session = self.current_session()
+        if session is None:
+            self.bell()
+            return
+        if session.tmux == "dead":
+            self.push_screen(ResumeSessionScreen(session), lambda opts: self.resume_session_done(session, opts))
+            return
+        self.exit(TuiResult("resume", session.slug))
+
+    def resume_session_done(self, session: WorktreeSession, options: ResumeOptions | None) -> None:
+        if options is not None:
+            self.exit(TuiResult("resume", session.slug, resume_options=options))
 
     def action_status(self) -> None:
         result = self.selected_result("status")
@@ -938,7 +1169,18 @@ def run_tui() -> None:
             no_rc=not opts.rc,
         )
     elif result.action == "resume" and result.slug:
-        resume(result.slug)
+        opts = result.resume_options
+        resume(
+            result.slug,
+            fresh=opts.fresh if opts else False,
+            pick=opts.pick if opts else False,
+            mode=opts.mode if opts else None,
+            model=opts.model if opts else None,
+            effort=opts.effort if opts else None,
+            prompt_file=None,
+            no_prompt=not opts.prompt if opts else False,
+            no_rc=not opts.rc if opts else False,
+        )
     elif result.action == "status" and result.slug:
         status(result.slug)
     elif result.action == "rm" and result.slug:
@@ -1000,7 +1242,20 @@ def interactive_new() -> None:
 @app.callback()
 def main(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is None:
-        run_tui()
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
+
+
+@app.command()
+def dash() -> None:
+    """Open dashboard TUI."""
+    run_tui()
+
+
+@app.command()
+def tui() -> None:
+    """Open dashboard TUI."""
+    run_tui()
 
 
 @app.command()

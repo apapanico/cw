@@ -175,5 +175,29 @@ def test_tui_new_form_autofills_slug():
             app.screen.query_one("#new-session-title", Input).value = "Demo Form"
             await pilot.pause()
             assert app.screen.query_one("#new-slug", Input).value == "demo-form"
+            assert app.screen.values().slug == "demo-form"
+            assert app.screen.values().branch is None
+            assert app.screen.values().base is None
+
+    asyncio.run(run_form_test())
+
+
+def test_tui_new_form_enter_creates():
+    import asyncio
+
+    from cw.cli import CwTui
+    from textual.widgets import Input
+
+    async def run_form_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            await pilot.press("n")
+            await pilot.pause()
+            app.screen.query_one("#new-session-title", Input).value = "Enter Create"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app._return_value.action == "new"
+            assert app._return_value.new_options.title == "Enter Create"
 
     asyncio.run(run_form_test())
