@@ -976,7 +976,7 @@ class RemoveSessionScreen(ModalScreen[str | None]):
 
     def warning_text(self) -> str:
         if self.can_remove_normally:
-            return "[r] remove  [f] force remove  [esc] cancel"
+            return ""
         return "Normal remove is blocked. Use [f] force only if you accept losing local work."
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
