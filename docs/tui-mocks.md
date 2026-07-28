@@ -41,7 +41,7 @@ test-suite-perf         dead       clean           claude/test-suite   │ Tmux 
                                                                       │ Unpushed   0 commits
                                                                       │ Recent     3 days ago Merge PR #74
 ──────────────────────────────────────────────────────────────────────┴─────────────────────────────────────
-[n] new  [enter] resume  [s] status  [/] filter  [x] remove  [k] kill
+[n] new  [enter] resume  [s] status  [/] filter  [esc] table/quit  [x] remove  [k] kill
 [p] prune  [d] doctor  [?] help  [q] quit
 ```
 
@@ -49,6 +49,8 @@ Notes:
 
 - `enter` should resume/attach the highlighted session.
 - Table should handle `DataTable.RowSelected`; app-level Enter may be swallowed.
+- `/` focuses the filter. While filtering, typed text should be visible;
+  `enter` or `esc` returns focus to the session table.
 - Explicit words beat unclear glyphs. Use color for tmux/state, not icons.
 - Details should use repo-relative paths when possible.
 

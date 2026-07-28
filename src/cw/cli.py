@@ -1027,9 +1027,27 @@ class CwTui(App[TuiResult | None]):
         color: #94a3b8;
     }
 
+    #filter-row {
+        height: 1;
+    }
+
+    #filter-label {
+        width: 9;
+        color: #94a3b8;
+    }
+
     #filter {
         width: 1fr;
-        margin-top: 1;
+        height: 1;
+        border: none;
+        background: #1f2937;
+        color: #e5e7eb;
+    }
+
+    #filter:focus {
+        background: #0f172a;
+        color: #ffffff;
+        text-style: bold;
     }
 
     #body {
@@ -1064,6 +1082,7 @@ class CwTui(App[TuiResult | None]):
         Binding("enter", "resume", "[enter] resume", show=False),
         Binding("s", "status", "[s] status", show=False),
         Binding("/", "focus_filter", "[/] filter", show=False),
+        Binding("escape", "exit_filter", "[esc] table", show=False),
         Binding("x", "remove", "[x] remove", show=False),
         Binding("k", "kill", "[k] kill", show=False),
         Binding("p", "prune", "[p] prune", show=False),
@@ -1083,7 +1102,9 @@ class CwTui(App[TuiResult | None]):
         with Vertical(id="top"):
             yield Static(f"Repo  {self.root}", id="repo")
             yield Static(f"Worktrees  {WORKTREE_DIR}", id="worktrees")
-            yield Input(placeholder="Filter sessions by name, branch, title, or state", id="filter")
+            with Horizontal(id="filter-row"):
+                yield Static("Filter", id="filter-label")
+                yield Input(placeholder="type to filter; enter/esc returns to table", compact=True, id="filter")
         with Horizontal(id="body"):
             yield DataTable(id="sessions")
             yield Static("", id="details")
@@ -1137,6 +1158,10 @@ class CwTui(App[TuiResult | None]):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "filter":
             self.apply_filter(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "filter":
+            self.focus_sessions()
 
     def on_data_table_row_highlighted(self, _: DataTable.RowHighlighted) -> None:
         self.update_details()
@@ -1250,6 +1275,15 @@ class CwTui(App[TuiResult | None]):
     def action_focus_filter(self) -> None:
         self.query_one("#filter", Input).focus()
 
+    def action_exit_filter(self) -> None:
+        if self.query_one("#filter", Input).has_focus:
+            self.focus_sessions()
+        else:
+            self.exit(None)
+
+    def focus_sessions(self) -> None:
+        self.query_one("#sessions", DataTable).focus()
+
     def action_help(self) -> None:
         def key(label: str) -> str:
             return f"[bold]{escape(label)}[/bold]"
@@ -1264,6 +1298,7 @@ class CwTui(App[TuiResult | None]):
                     f"{key('[enter]')}  resume selected session",
                     f"{key('[s]')}      print selected session status",
                     f"{key('[/]')}      focus the filter",
+                    f"{key('[esc]')}    leave filter or quit",
                     f"{key('[x]')}      remove selected session, with confirmation",
                     f"{key('[k]')}      kill selected tmux session, with confirmation",
                     f"{key('[p]')}      preview prune, then optionally apply",

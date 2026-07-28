@@ -231,3 +231,29 @@ def test_tui_remove_modal_returns_force_choice():
             assert app._return_value.force is True
 
     asyncio.run(run_remove_test())
+
+
+def test_tui_filter_focus_and_exit():
+    import asyncio
+
+    from cw.cli import CwTui
+    from textual.widgets import DataTable, Input
+
+    async def run_filter_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            await pilot.press("/")
+            await pilot.pause()
+            assert app.query_one("#filter", Input).has_focus
+            app.query_one("#filter", Input).value = "demo"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.query_one("#sessions", DataTable).has_focus
+            await pilot.press("/")
+            await pilot.pause()
+            assert app.query_one("#filter", Input).has_focus
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.query_one("#sessions", DataTable).has_focus
+
+    asyncio.run(run_filter_test())
