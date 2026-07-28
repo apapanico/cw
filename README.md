@@ -15,7 +15,8 @@ uv run pytest
 
 Run `uv run cw` with no subcommand to open the Textual session browser. It
 shows the full repo path, a filterable worktree list, selected-session details,
-and bracketed keyboard shortcuts for common actions.
+and bracketed keyboard shortcuts for common actions. Press `[n]` to open an
+in-TUI new-session form with defaults visible up front.
 
 Longer-term product ideas live in `docs/ideas.md`, including attached repo
 management and optional GitHub/Linear/Jira-style integrations.

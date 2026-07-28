@@ -16,8 +16,9 @@ from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Footer, Header, Input, Static
+from textual.containers import Container, Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, Select, Static
 
 WORKTREE_DIR = Path(".claude/worktrees")
 BRANCH_PREFIX = "claude/"
@@ -56,9 +57,24 @@ class WorktreeSession:
 
 
 @dataclass(frozen=True)
+class NewSessionOptions:
+    title: str
+    slug: str | None = None
+    branch: str | None = None
+    base: str | None = None
+    mode: str | None = None
+    model: str | None = None
+    effort: str | None = None
+    native: bool = False
+    rc: bool = True
+    prompt: bool = True
+
+
+@dataclass(frozen=True)
 class TuiResult:
     action: str
     slug: str | None = None
+    new_options: NewSessionOptions | None = None
 
 
 def info(message: str) -> None:
@@ -433,6 +449,219 @@ def state_text(value: str) -> Text:
     return Text(value, style="yellow")
 
 
+class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
+    CSS = """
+    NewSessionScreen {
+        align: center middle;
+    }
+
+    #new-dialog {
+        width: 78;
+        max-width: 96%;
+        height: auto;
+        padding: 1 2;
+        border: thick #38bdf8;
+        background: #111827;
+    }
+
+    #new-title {
+        height: 1;
+        margin-bottom: 1;
+        color: #e2e8f0;
+        text-style: bold;
+    }
+
+    .field-label {
+        height: 1;
+        margin-top: 1;
+        color: #94a3b8;
+    }
+
+    .toggle-row {
+        height: auto;
+        margin-top: 1;
+    }
+
+    #new-preview {
+        min-height: 4;
+        margin-top: 1;
+        padding: 1;
+        border: solid #334155;
+        color: #cbd5e1;
+    }
+
+    #new-error {
+        height: 1;
+        margin-top: 1;
+        color: #f87171;
+    }
+
+    #new-buttons {
+        height: 3;
+        margin-top: 1;
+        align-horizontal: right;
+    }
+
+    Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel"),
+        Binding("ctrl+s", "create", "create"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.auto_slug = ""
+
+    def compose(self) -> ComposeResult:
+        with Container(id="new-dialog"):
+            yield Static("New session", id="new-title")
+            yield Label("Title", classes="field-label")
+            yield Input(placeholder="Demo cw", id="new-session-title")
+            yield Label("Slug", classes="field-label")
+            yield Input(placeholder="auto from title", id="new-slug")
+            yield Label("Branch override", classes="field-label")
+            yield Input(placeholder="blank => claude/<slug>", id="new-branch")
+            yield Label("Base ref", classes="field-label")
+            yield Input(placeholder="blank => fetch latest origin/main", id="new-base")
+            yield Label("Permission mode", classes="field-label")
+            yield Select(
+                [
+                    ("default", "default"),
+                    ("manual", "manual"),
+                    ("accept", "accept"),
+                    ("plan", "plan"),
+                    ("auto", "auto"),
+                    ("bypass", "bypass"),
+                ],
+                value="default",
+                allow_blank=False,
+                id="new-mode",
+            )
+            yield Label("Model", classes="field-label")
+            yield Input(placeholder="blank => Claude default", id="new-model")
+            yield Label("Effort", classes="field-label")
+            yield Select(
+                [
+                    ("default", "default"),
+                    ("low", "low"),
+                    ("medium", "medium"),
+                    ("high", "high"),
+                    ("xhigh", "xhigh"),
+                    ("max", "max"),
+                ],
+                value="default",
+                allow_blank=False,
+                id="new-effort",
+            )
+            with Horizontal(classes="toggle-row"):
+                yield Checkbox("classic tmux", value=True, id="new-classic")
+                yield Checkbox("Remote Control", value=True, id="new-rc")
+                yield Checkbox("session prompt", value=True, id="new-prompt")
+            yield Static("", id="new-preview")
+            yield Static("", id="new-error")
+            with Horizontal(id="new-buttons"):
+                yield Button("Cancel", id="new-cancel")
+                yield Button("Create", variant="primary", id="new-create")
+
+    def on_mount(self) -> None:
+        self.query_one("#new-session-title", Input).focus()
+        self.update_preview()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "new-session-title":
+            slug_input = self.query_one("#new-slug", Input)
+            derived = slugify(event.value)
+            if not slug_input.value or slug_input.value == self.auto_slug:
+                slug_input.value = derived
+            self.auto_slug = derived
+        self.update_preview()
+
+    def on_select_changed(self, _: Select.Changed) -> None:
+        self.update_preview()
+
+    def on_checkbox_changed(self, _: Checkbox.Changed) -> None:
+        self.update_preview()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "new-cancel":
+            self.dismiss(None)
+        elif event.button.id == "new-create":
+            self.create()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_create(self) -> None:
+        self.create()
+
+    def values(self) -> NewSessionOptions:
+        title = self.query_one("#new-session-title", Input).value.strip()
+        slug = self.query_one("#new-slug", Input).value.strip() or None
+        branch = self.query_one("#new-branch", Input).value.strip() or None
+        base = self.query_one("#new-base", Input).value.strip() or None
+        mode = str(self.query_one("#new-mode", Select).value)
+        model = self.query_one("#new-model", Input).value.strip() or None
+        effort = str(self.query_one("#new-effort", Select).value)
+        classic = self.query_one("#new-classic", Checkbox).value
+        rc = self.query_one("#new-rc", Checkbox).value
+        prompt = self.query_one("#new-prompt", Checkbox).value
+        return NewSessionOptions(
+            title=title,
+            slug=slug,
+            branch=branch,
+            base=base,
+            mode=default_choice(mode),
+            model=model,
+            effort=default_choice(effort),
+            native=not classic,
+            rc=rc,
+            prompt=prompt,
+        )
+
+    def create(self) -> None:
+        options = self.values()
+        error = self.query_one("#new-error", Static)
+        if not options.title:
+            error.update("Title is required.")
+            return
+        slug = options.slug or slugify(options.title)
+        if not slug:
+            error.update("Could not derive a slug; enter one manually.")
+            return
+        error.update("")
+        self.dismiss(options)
+
+    def update_preview(self) -> None:
+        options = self.values()
+        slug = options.slug or slugify(options.title) or "<slug>"
+        branch = options.branch or f"{BRANCH_PREFIX}{slug}"
+        base = options.base or "latest origin/main"
+        tmux = "--tmux" if options.native else "--tmux=classic"
+        extras = []
+        if options.mode:
+            extras.append(f"--mode {options.mode}")
+        if options.model:
+            extras.append(f"--model {options.model}")
+        if options.effort:
+            extras.append(f"--effort {options.effort}")
+        if not options.rc:
+            extras.append("--no-rc")
+        if not options.prompt:
+            extras.append("--no-prompt")
+        preview = [
+            f"[bold]slug[/bold]    {slug}",
+            f"[bold]branch[/bold]  {branch}",
+            f"[bold]base[/bold]    {base}",
+            f"[bold]launch[/bold]  claude --worktree {slug} {tmux} --name {options.title or '<title>'} "
+            f"{' '.join(extras)}".rstrip(),
+        ]
+        self.query_one("#new-preview", Static).update("\n".join(preview))
+
+
 class CwTui(App[TuiResult | None]):
     TITLE = "cw"
     SUB_TITLE = "Claude worktrees"
@@ -628,7 +857,11 @@ class CwTui(App[TuiResult | None]):
         return TuiResult(action, s.slug)
 
     def action_new(self) -> None:
-        self.exit(TuiResult("new"))
+        self.push_screen(NewSessionScreen(), self.new_session_done)
+
+    def new_session_done(self, options: NewSessionOptions | None) -> None:
+        if options is not None:
+            self.exit(TuiResult("new", new_options=options))
 
     def action_resume(self) -> None:
         result = self.selected_result("resume")
@@ -689,8 +922,21 @@ def run_tui() -> None:
     result = CwTui(repo_root()).run()
     if result is None:
         raise typer.Exit(0)
-    if result.action == "new":
-        interactive_new()
+    if result.action == "new" and result.new_options:
+        opts = result.new_options
+        new(
+            title=[opts.title],
+            slug=opts.slug,
+            branch=opts.branch,
+            base=opts.base,
+            mode=opts.mode,
+            model=opts.model,
+            effort=opts.effort,
+            prompt_file=None,
+            no_prompt=not opts.prompt,
+            native=opts.native,
+            no_rc=not opts.rc,
+        )
     elif result.action == "resume" and result.slug:
         resume(result.slug)
     elif result.action == "status" and result.slug:

@@ -159,3 +159,21 @@ def test_exec_from_changes_to_repo_root_before_exec(monkeypatch):
         "cwd": Path("/repo"),
         "args": ["claude", "--worktree", "demo"],
     }
+
+
+def test_tui_new_form_autofills_slug():
+    import asyncio
+
+    from cw.cli import CwTui
+    from textual.widgets import Input
+
+    async def run_form_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            await pilot.press("n")
+            await pilot.pause()
+            app.screen.query_one("#new-session-title", Input).value = "Demo Form"
+            await pilot.pause()
+            assert app.screen.query_one("#new-slug", Input).value == "demo-form"
+
+    asyncio.run(run_form_test())
