@@ -601,10 +601,7 @@ class KillSessionScreen(ModalScreen[bool]):
     }
 
     #kill-details {
-        height: 4;
-        padding: 1;
-        border: solid #334155;
-        background: #0b1220;
+        height: 3;
         color: #cbd5e1;
     }
 

@@ -286,6 +286,7 @@ def test_tui_kill_modal_stays_in_dashboard():
 
     from cw.models import KillResult, WorktreeSession
     from cw.tui import CwTui
+    from textual.widgets import Static
 
     async def run_kill_test():
         app = CwTui(Path.cwd())
@@ -303,6 +304,7 @@ def test_tui_kill_modal_stays_in_dashboard():
             await pilot.press("k")
             await pilot.pause()
             assert type(app.screen).__name__ == "KillSessionScreen"
+            assert "Session" in str(app.screen.query_one("#kill-details", Static).render())
             await pilot.press("k")
             await pilot.pause()
             assert app._return_value is None
