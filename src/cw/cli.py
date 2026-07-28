@@ -544,7 +544,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "cancel"),
-        Binding("shift+enter", "create", "create", priority=True),
+        Binding("f5", "create", "create", priority=True),
         Binding("ctrl+s", "create", "create"),
     ]
 
@@ -638,8 +638,12 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
             self.auto_slug = derived
         self.update_preview()
 
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        self.focus_next()
+
     def on_select_changed(self, _: Select.Changed) -> None:
         self.update_preview()
+        self.focus_next()
 
     def on_checkbox_changed(self, _: Checkbox.Changed) -> None:
         self.update_preview()
@@ -1256,7 +1260,7 @@ class CwTui(App[TuiResult | None]):
                     "[bold]Keyboard[/bold]",
                     "",
                     f"{key('[n]')}      create a new session",
-                    f"{key('[shift+enter]')} create from the new-session form",
+                    f"{key('[f5]')}     create from the new-session form",
                     f"{key('[enter]')}  resume selected session",
                     f"{key('[s]')}      print selected session status",
                     f"{key('[/]')}      focus the filter",

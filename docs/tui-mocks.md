@@ -71,7 +71,7 @@ visible. This should not drop into sequential CLI prompts.
 │ base    origin/main (fetch first)                                                                         │
 │ launch  claude --worktree demo-cw --tmux=classic --name "Demo cw" --remote-control                       │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ [shift+enter] create  [tab] next field  [shift-tab] prev field  [esc] cancel                             │
+│ [f5] create now  [enter] select/advance  [tab] next field  [shift-tab] prev field  [esc] cancel          │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -89,7 +89,7 @@ visible. This should not drop into sequential CLI prompts.
 │ Claude launch                                                                                             │
 │ claude --worktree demo-cw --tmux=classic --name "Demo cw" --remote-control                               │
 │                                                                                                          │
-│ [shift+enter] create   [esc] cancel                                                                       │
+│ [f5] create now   [enter] select/advance   [esc] cancel                                                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
