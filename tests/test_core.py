@@ -2,9 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from cw.cli import (
-    ModeError,
-    WorktreeSession,
+from cw.models import ModeError, WorktreeSession
+from cw.operations import (
     claude_base_args,
     default_choice,
     display_name,
@@ -150,8 +149,8 @@ def test_exec_from_changes_to_repo_root_before_exec(monkeypatch):
     def fake_execvp(args):
         calls["args"] = args
 
-    monkeypatch.setattr("cw.cli.os.chdir", fake_chdir)
-    monkeypatch.setattr("cw.cli.execvp", fake_execvp)
+    monkeypatch.setattr("cw.operations.os.chdir", fake_chdir)
+    monkeypatch.setattr("cw.operations.execvp", fake_execvp)
 
     exec_from(Path("/repo"), ["claude", "--worktree", "demo"])
 
@@ -164,7 +163,7 @@ def test_exec_from_changes_to_repo_root_before_exec(monkeypatch):
 def test_tui_new_form_autofills_slug():
     import asyncio
 
-    from cw.cli import CwTui
+    from cw.tui import CwTui
     from textual.widgets import Button, Input, Static
 
     async def run_form_test():
@@ -188,7 +187,8 @@ def test_tui_new_form_autofills_slug():
 def test_tui_new_form_ctrl_enter_creates():
     import asyncio
 
-    from cw.cli import CwTui, LaunchPlan
+    from cw.models import LaunchPlan
+    from cw.tui import CwTui
     from textual.widgets import Input
 
     async def run_form_test():
@@ -210,20 +210,21 @@ def test_tui_new_form_ctrl_enter_creates():
         kwargs["log"]("cw: fake launch")
         return LaunchPlan(Path.cwd(), ["claude", "--worktree", "enter-create"])
 
-    import cw.cli
+    import cw.tui
 
-    original = cw.cli.prepare_new_session
-    cw.cli.prepare_new_session = fake_prepare_new_session
+    original = cw.tui.prepare_new_session
+    cw.tui.prepare_new_session = fake_prepare_new_session
     try:
         asyncio.run(run_form_test())
     finally:
-        cw.cli.prepare_new_session = original
+        cw.tui.prepare_new_session = original
 
 
 def test_tui_remove_modal_returns_force_choice():
     import asyncio
 
-    from cw.cli import CwTui, RemoveResult, WorktreeSession
+    from cw.models import RemoveResult, WorktreeSession
+    from cw.tui import CwTui
     from textual.widgets import Button, Static
 
     async def run_remove_test():
@@ -261,14 +262,14 @@ def test_tui_remove_modal_returns_force_choice():
             branch_deleted=True,
         )
 
-    import cw.cli
+    import cw.tui
 
-    original = cw.cli.remove_session
-    cw.cli.remove_session = fake_remove_session
+    original = cw.tui.remove_session
+    cw.tui.remove_session = fake_remove_session
     try:
         asyncio.run(run_remove_test())
     finally:
-        cw.cli.remove_session = original
+        cw.tui.remove_session = original
 
     assert calls["args"] == (Path.cwd(), "dirty", True, None)
 
@@ -276,7 +277,8 @@ def test_tui_remove_modal_returns_force_choice():
 def test_tui_kill_modal_stays_in_dashboard():
     import asyncio
 
-    from cw.cli import CwTui, KillResult, WorktreeSession
+    from cw.models import KillResult, WorktreeSession
+    from cw.tui import CwTui
 
     async def run_kill_test():
         app = CwTui(Path.cwd())
@@ -305,14 +307,14 @@ def test_tui_kill_modal_stays_in_dashboard():
         calls["args"] = (root, name, log)
         return KillResult(slug=name, session="cw_worktree-live")
 
-    import cw.cli
+    import cw.tui
 
-    original = cw.cli.kill_session
-    cw.cli.kill_session = fake_kill_session
+    original = cw.tui.kill_session
+    cw.tui.kill_session = fake_kill_session
     try:
         asyncio.run(run_kill_test())
     finally:
-        cw.cli.kill_session = original
+        cw.tui.kill_session = original
 
     assert calls["args"] == (Path.cwd(), "live", None)
 
@@ -320,7 +322,7 @@ def test_tui_kill_modal_stays_in_dashboard():
 def test_tui_filter_focus_and_exit():
     import asyncio
 
-    from cw.cli import CwTui
+    from cw.tui import CwTui
     from textual.widgets import DataTable, Input
 
     async def run_filter_test():
@@ -346,7 +348,7 @@ def test_tui_filter_focus_and_exit():
 def test_tui_input_word_delete_shortcut():
     import asyncio
 
-    from cw.cli import CwTui
+    from cw.tui import CwTui
     from textual.widgets import Input
 
     async def run_word_delete_test():
@@ -367,7 +369,7 @@ def test_tui_input_word_delete_shortcut():
 def test_tui_filter_word_delete_shortcut():
     import asyncio
 
-    from cw.cli import CwTui
+    from cw.tui import CwTui
     from textual.widgets import Input
 
     async def run_word_delete_test():
@@ -388,7 +390,7 @@ def test_tui_filter_word_delete_shortcut():
 def test_tui_doctor_modal_stays_in_dashboard():
     import asyncio
 
-    from cw.cli import CwTui
+    from cw.tui import CwTui
 
     async def run_doctor_test():
         app = CwTui(Path.cwd())
@@ -407,7 +409,8 @@ def test_tui_doctor_modal_stays_in_dashboard():
 def test_tui_status_modal_stays_in_dashboard():
     import asyncio
 
-    from cw.cli import CwTui, WorktreeSession
+    from cw.models import WorktreeSession
+    from cw.tui import CwTui
 
     async def run_status_test():
         app = CwTui(Path.cwd())
@@ -436,7 +439,7 @@ def test_tui_status_modal_stays_in_dashboard():
 def test_tui_prune_modal_stays_in_dashboard():
     import asyncio
 
-    from cw.cli import CwTui
+    from cw.tui import CwTui
     from textual.widgets import Button, DataTable, RichLog, Static
 
     async def run_prune_test():
