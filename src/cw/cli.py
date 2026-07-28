@@ -1097,6 +1097,107 @@ class DoctorScreen(ModalScreen[None]):
         self.refresh_doctor()
 
 
+class StatusScreen(ModalScreen[str | None]):
+    CSS = """
+    StatusScreen {
+        align: center middle;
+    }
+
+    #status-dialog {
+        width: 82;
+        max-width: 94%;
+        height: auto;
+        padding: 1 2;
+        border: solid #22c55e;
+        background: #111827;
+    }
+
+    #status-title {
+        height: 1;
+        margin-bottom: 1;
+        color: #dcfce7;
+        text-style: bold;
+    }
+
+    #status-body {
+        min-height: 14;
+        color: #cbd5e1;
+    }
+
+    #status-buttons {
+        height: 3;
+        margin-top: 1;
+        align-horizontal: right;
+    }
+
+    Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "close"),
+        Binding("enter", "resume", "resume"),
+    ]
+
+    def __init__(self, session: WorktreeSession, root: Path) -> None:
+        super().__init__()
+        self.session = session
+        self.root = root
+
+    def compose(self) -> ComposeResult:
+        with Container(id="status-dialog"):
+            yield Static(f"Status {self.session.slug}", id="status-title")
+            yield Static(self.body_text(), id="status-body")
+            with Horizontal(id="status-buttons"):
+                yield Button("Back", id="status-back")
+                yield Button("Resume", variant="primary", id="status-resume")
+
+    def display_path(self) -> Path:
+        if self.session.path.is_absolute():
+            try:
+                return self.session.path.relative_to(self.root)
+            except ValueError:
+                return self.session.path
+        return self.session.path
+
+    def body_text(self) -> str:
+        return "\n".join(
+            [
+                f"[bold]Repo[/bold]      {self.root}",
+                f"[bold]Worktree[/bold]  {self.display_path()}",
+                f"[bold]Branch[/bold]    {self.session.branch}",
+                f"[bold]Upstream[/bold]  {self.session.upstream or '-'}",
+                f"[bold]Tmux[/bold]      {self.session.tmux}",
+                f"[bold]Session[/bold]   {session_name(self.root, self.session.slug)}",
+                f"[bold]Dirty[/bold]     {self.session.dirty_count} file(s)",
+                f"[bold]Unpushed[/bold]  {self.session.unpushed_count} commit(s)",
+                "",
+                "[bold]Recent[/bold]",
+                f"  {self.session.last_commit or '-'}",
+                "",
+                "[bold]Linked work[/bold]",
+                "  PR      -",
+                "  Linear  -",
+                "  Jira    -",
+                "",
+                "[dim][enter] resume  [esc] back[/dim]",
+            ]
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "status-back":
+            self.dismiss(None)
+        elif event.button.id == "status-resume":
+            self.dismiss("resume")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def action_resume(self) -> None:
+        self.dismiss("resume")
+
+
 class CwTui(App[TuiResult | None]):
     TITLE = "cw"
     SUB_TITLE = "Claude worktrees"
@@ -1341,9 +1442,18 @@ class CwTui(App[TuiResult | None]):
             self.exit(TuiResult("resume", session.slug, resume_options=options))
 
     def action_status(self) -> None:
-        result = self.selected_result("status")
-        if result:
-            self.exit(result)
+        session = self.current_session()
+        if session is None:
+            self.bell()
+            return
+        self.push_screen(StatusScreen(session, self.root), lambda choice: self.status_done(session, choice))
+
+    def status_done(self, session: WorktreeSession, choice: str | None) -> None:
+        if choice == "resume":
+            if session.tmux == "dead":
+                self.push_screen(ResumeSessionScreen(session), lambda opts: self.resume_session_done(session, opts))
+            else:
+                self.exit(TuiResult("resume", session.slug))
 
     def action_remove(self) -> None:
         session = self.current_session()
@@ -1441,8 +1551,6 @@ def run_tui() -> None:
             no_prompt=not opts.prompt if opts else False,
             no_rc=not opts.rc if opts else False,
         )
-    elif result.action == "status" and result.slug:
-        status(result.slug)
     elif result.action == "rm" and result.slug:
         rm(result.slug, force=result.force)
     elif result.action == "kill" and result.slug:

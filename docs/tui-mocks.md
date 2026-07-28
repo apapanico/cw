@@ -204,7 +204,8 @@ Rules:
 
 ## Status Flow
 
-Status can either stay as the details pane or open a larger modal:
+`[s]` opens a larger modal inside `cw dash`; it should not drop to terminal
+output.
 
 ```text
 ┌─ Status demo-cw ─────────────────────────────────────────────┐

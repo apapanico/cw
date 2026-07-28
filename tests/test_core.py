@@ -276,3 +276,32 @@ def test_tui_doctor_modal_stays_in_dashboard():
             assert app._return_value is None
 
     asyncio.run(run_doctor_test())
+
+
+def test_tui_status_modal_stays_in_dashboard():
+    import asyncio
+
+    from cw.cli import CwTui, WorktreeSession
+
+    async def run_status_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            app.sessions = [
+                WorktreeSession(
+                    slug="demo",
+                    branch="claude/demo",
+                    title="Demo",
+                    tmux="detached",
+                    path=Path.cwd() / ".claude/worktrees/demo",
+                )
+            ]
+            app.apply_filter("")
+            await pilot.press("s")
+            await pilot.pause()
+            assert type(app.screen).__name__ == "StatusScreen"
+            await pilot.press("escape")
+            await pilot.pause()
+            assert type(app.screen).__name__ == "Screen"
+            assert app._return_value is None
+
+    asyncio.run(run_status_test())
