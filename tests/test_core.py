@@ -165,13 +165,16 @@ def test_tui_new_form_autofills_slug():
     import asyncio
 
     from cw.cli import CwTui
-    from textual.widgets import Input
+    from textual.widgets import Button, Input, Static
 
     async def run_form_test():
         app = CwTui(Path.cwd())
         async with app.run_test() as pilot:
             await pilot.press("n")
             await pilot.pause()
+            assert not list(app.screen.query(Button))
+            assert app.screen.query_one("#new-actions", Static)
+            assert app.screen.query_one("#new-summary", Static)
             app.screen.query_one("#new-session-title", Input).value = "Demo Form"
             await pilot.pause()
             assert app.screen.query_one("#new-slug", Input).value == "demo-form"

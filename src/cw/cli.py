@@ -564,9 +564,9 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
     }
 
     #new-dialog {
-        width: 96;
+        width: 94;
         max-width: 96%;
-        height: auto;
+        height: 22;
         padding: 1 2;
         border: solid #38bdf8;
         background: #111827;
@@ -601,15 +601,16 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
     }
 
     .toggle-row {
-        height: auto;
+        height: 1;
         margin-top: 0;
     }
 
-    #new-preview {
-        min-height: 3;
+    #new-summary {
+        height: 4;
         margin-top: 1;
         padding: 1;
         border: solid #334155;
+        background: #0b1220;
         color: #cbd5e1;
     }
 
@@ -626,14 +627,10 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
         color: #f87171;
     }
 
-    #new-buttons {
-        height: 3;
+    #new-actions {
+        height: 1;
         margin-top: 1;
-        align-horizontal: right;
-    }
-
-    Button {
-        margin-left: 1;
+        color: #cbd5e1;
     }
     """
 
@@ -713,14 +710,12 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
                 with Vertical(classes="form-cell"):
                     yield Label("Launch", classes="field-label")
                     with Horizontal(classes="toggle-row"):
-                        yield Checkbox("classic tmux", value=True, compact=True, id="new-classic")
-                        yield Checkbox("Remote Control", value=True, compact=True, id="new-rc")
+                        yield Checkbox("classic", value=True, compact=True, id="new-classic")
+                        yield Checkbox("remote", value=True, compact=True, id="new-rc")
                         yield Checkbox("prompt", value=True, compact=True, id="new-prompt")
-            yield Static("", id="new-preview")
+            yield Static("", id="new-summary")
             yield Static("", id="new-error")
-            with Horizontal(id="new-buttons"):
-                yield Button("Cancel", id="new-cancel")
-                yield Button("Create", variant="primary", id="new-create")
+            yield Static(Text("[ctrl+enter] create  [esc] back"), id="new-actions")
 
     def on_mount(self) -> None:
         self.query_one("#new-session-title", Input).focus()
@@ -744,12 +739,6 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
 
     def on_checkbox_changed(self, _: Checkbox.Changed) -> None:
         self.update_preview()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "new-cancel":
-            self.dismiss(None)
-        elif event.button.id == "new-create":
-            self.create()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -802,28 +791,28 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
         options = self.values()
         slug = options.slug or slugify(options.title) or "<slug>"
         branch = options.branch or f"{BRANCH_PREFIX}{slug}"
-        base = options.base or "origin/main (fetch first)"
-        tmux = "--tmux" if options.native else "--tmux=classic"
+        base = options.base or "origin/main"
+        tmux = "native tmux" if options.native else "classic tmux"
         extras = []
         if options.mode:
-            extras.append(f"--mode {options.mode}")
+            extras.append(f"mode {options.mode}")
         if options.model:
-            extras.append(f"--model {options.model}")
+            extras.append(f"model {options.model}")
         if options.effort:
-            extras.append(f"--effort {options.effort}")
+            extras.append(f"effort {options.effort}")
         if not options.rc:
-            extras.append("--no-rc")
+            extras.append("no remote control")
         if not options.prompt:
-            extras.append("--no-prompt")
+            extras.append("no prompt")
+        flags = ", ".join([tmux, *extras]) or tmux
         preview = [
-            f"[bold]slug[/bold]    {slug}",
-            f"[bold]branch[/bold]  {branch}",
-            f"[bold]base[/bold]    {base}",
-            f"[bold]launch[/bold]  claude --worktree {slug} {tmux} --name {options.title or '<title>'} "
-            f"{' '.join(extras)}".rstrip(),
+            f"[bold]slug[/bold]    {escape(slug)}",
+            f"[bold]branch[/bold]  {escape(branch)}",
+            f"[bold]base[/bold]    {escape(base)}  [dim]{'fetch first' if options.base is None else 'custom ref'}[/dim]",
+            f"[bold]launch[/bold]  {escape(flags)}",
         ]
         self.query_one("#new-branch-preview", Static).update(branch)
-        self.query_one("#new-preview", Static).update("\n".join(preview))
+        self.query_one("#new-summary", Static).update("\n".join(preview))
 
 
 class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
