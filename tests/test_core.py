@@ -220,7 +220,7 @@ def test_tui_new_form_ctrl_enter_creates():
 def test_tui_remove_modal_returns_force_choice():
     import asyncio
 
-    from cw.cli import CwTui, WorktreeSession
+    from cw.cli import CwTui, RemoveResult, WorktreeSession
     from textual.widgets import Button, Static
 
     async def run_remove_test():
@@ -243,11 +243,75 @@ def test_tui_remove_modal_returns_force_choice():
             assert app.screen.query_one("#remove-actions", Static)
             await pilot.press("f")
             await pilot.pause()
-            assert app._return_value.action == "rm"
-            assert app._return_value.slug == "dirty"
-            assert app._return_value.force is True
+            assert app._return_value is None
+            assert type(app.screen).__name__ == "Screen"
 
-    asyncio.run(run_remove_test())
+    calls = {}
+
+    def fake_remove_session(root, name, *, force=False, log=None):
+        calls["args"] = (root, name, force, log)
+        return RemoveResult(
+            slug=name,
+            branch="claude/dirty",
+            worktree=Path(".claude/worktrees/dirty"),
+            killed_tmux=False,
+            branch_deleted=True,
+        )
+
+    import cw.cli
+
+    original = cw.cli.remove_session
+    cw.cli.remove_session = fake_remove_session
+    try:
+        asyncio.run(run_remove_test())
+    finally:
+        cw.cli.remove_session = original
+
+    assert calls["args"] == (Path.cwd(), "dirty", True, None)
+
+
+def test_tui_kill_modal_stays_in_dashboard():
+    import asyncio
+
+    from cw.cli import CwTui, KillResult, WorktreeSession
+
+    async def run_kill_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            app.sessions = [
+                WorktreeSession(
+                    slug="live",
+                    branch="claude/live",
+                    title="Live",
+                    tmux="detached",
+                    path=Path.cwd() / ".claude/worktrees/live",
+                )
+            ]
+            app.apply_filter("")
+            await pilot.press("k")
+            await pilot.pause()
+            assert type(app.screen).__name__ == "KillSessionScreen"
+            await pilot.press("k")
+            await pilot.pause()
+            assert app._return_value is None
+            assert type(app.screen).__name__ == "Screen"
+
+    calls = {}
+
+    def fake_kill_session(root, name, *, log=None):
+        calls["args"] = (root, name, log)
+        return KillResult(slug=name, session="cw_worktree-live")
+
+    import cw.cli
+
+    original = cw.cli.kill_session
+    cw.cli.kill_session = fake_kill_session
+    try:
+        asyncio.run(run_kill_test())
+    finally:
+        cw.cli.kill_session = original
+
+    assert calls["args"] == (Path.cwd(), "live", None)
 
 
 def test_tui_filter_focus_and_exit():

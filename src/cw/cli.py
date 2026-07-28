@@ -120,6 +120,21 @@ class PruneRow:
     reason: str
 
 
+@dataclass(frozen=True)
+class RemoveResult:
+    slug: str
+    branch: str
+    worktree: Path
+    killed_tmux: bool
+    branch_deleted: bool
+
+
+@dataclass(frozen=True)
+class KillResult:
+    slug: str
+    session: str
+
+
 def info(message: str) -> None:
     console.print(f"cw: {message}")
 
@@ -1081,6 +1096,75 @@ class RemoveSessionScreen(ModalScreen[str | None]):
         self.dismiss("force")
 
 
+class KillSessionScreen(ModalScreen[bool]):
+    CSS = """
+    KillSessionScreen {
+        align: center middle;
+    }
+
+    #kill-dialog {
+        width: 72;
+        max-width: 94%;
+        height: 12;
+        padding: 1 2;
+        border: solid #f59e0b;
+        background: #111827;
+    }
+
+    #kill-title {
+        height: 1;
+        margin-bottom: 1;
+        color: #fed7aa;
+        text-style: bold;
+    }
+
+    #kill-details {
+        height: 4;
+        padding: 1;
+        border: solid #334155;
+        background: #0b1220;
+        color: #cbd5e1;
+    }
+
+    #kill-actions {
+        height: 1;
+        margin-top: 1;
+        color: #cbd5e1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel"),
+        Binding("k", "kill", "kill"),
+    ]
+
+    def __init__(self, session: WorktreeSession, root: Path) -> None:
+        super().__init__()
+        self.session = session
+        self.root = root
+
+    def compose(self) -> ComposeResult:
+        with Container(id="kill-dialog"):
+            yield Static(f"Kill {self.session.slug}", id="kill-title")
+            yield Static(self.details_text(), id="kill-details")
+            yield Static(Text("[k] kill tmux  [esc] back"), id="kill-actions")
+
+    def details_text(self) -> str:
+        return "\n".join(
+            [
+                f"[bold]Tmux[/bold]     {escape(self.session.tmux)}",
+                f"[bold]Session[/bold]  {escape(session_name(self.root, self.session.slug))}",
+                "Leaves the worktree and branch intact.",
+            ]
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def action_kill(self) -> None:
+        self.dismiss(True)
+
+
 class DoctorScreen(ModalScreen[None]):
     CSS = """
     DoctorScreen {
@@ -1828,15 +1912,69 @@ class CwTui(App[TuiResult | None]):
         self.push_screen(RemoveSessionScreen(session, self.root), lambda choice: self.remove_session_done(session, choice))
 
     def remove_session_done(self, session: WorktreeSession, choice: str | None) -> None:
-        if choice == "remove":
-            self.exit(TuiResult("rm", session.slug))
-        elif choice == "force":
-            self.exit(TuiResult("rm", session.slug, force=True))
+        if choice not in {"remove", "force"}:
+            return
+        try:
+            result = remove_session(self.root, session.slug, force=choice == "force")
+        except CwError as exc:
+            self.refresh_sessions()
+            self.query_one("#details", Static).update(
+                "\n".join(
+                    [
+                        "[bold red]Remove Failed[/bold red]",
+                        "",
+                        escape(str(exc)),
+                        "",
+                        "[dim]Use [x] to reopen remove, or [/] to filter sessions.[/dim]",
+                    ]
+                )
+            )
+            return
+        self.refresh_sessions()
+        details = [
+            "[bold green]Removed[/bold green]",
+            "",
+            f"[bold]Name[/bold]      {escape(result.slug)}",
+            f"[bold]Worktree[/bold]  {escape(str(result.worktree))}",
+            f"[bold]Branch[/bold]    {escape(result.branch or '-')}",
+            f"[bold]Tmux[/bold]      {'killed' if result.killed_tmux else 'not running'}",
+            f"[bold]Cleanup[/bold]   {'branch deleted' if result.branch_deleted else 'branch not found'}",
+            "",
+            "[dim]Dashboard refreshed.[/dim]",
+        ]
+        self.query_one("#details", Static).update("\n".join(details))
 
     def action_kill(self) -> None:
-        result = self.selected_result("kill")
-        if result:
-            self.exit(result)
+        session = self.current_session()
+        if session is None:
+            self.bell()
+            return
+        self.push_screen(KillSessionScreen(session, self.root), lambda confirmed: self.kill_session_done(session, confirmed))
+
+    def kill_session_done(self, session: WorktreeSession, confirmed: bool | None) -> None:
+        if not confirmed:
+            return
+        try:
+            result = kill_session(self.root, session.slug)
+        except CwError as exc:
+            self.refresh_sessions()
+            self.query_one("#details", Static).update(
+                "\n".join(["[bold red]Kill Failed[/bold red]", "", escape(str(exc))])
+            )
+            return
+        self.refresh_sessions()
+        self.query_one("#details", Static).update(
+            "\n".join(
+                [
+                    "[bold green]Killed Tmux[/bold green]",
+                    "",
+                    f"[bold]Name[/bold]     {escape(result.slug)}",
+                    f"[bold]Session[/bold]  {escape(result.session)}",
+                    "",
+                    "[dim]Worktree and branch left intact.[/dim]",
+                ]
+            )
+        )
 
     def action_prune(self) -> None:
         self.push_screen(PruneScreen(self.root), self.prune_done)
@@ -1926,11 +2064,6 @@ def run_tui() -> None:
             no_prompt=not opts.prompt if opts else False,
             no_rc=not opts.rc if opts else False,
         )
-    elif result.action == "rm" and result.slug:
-        rm(result.slug, force=result.force)
-    elif result.action == "kill" and result.slug:
-        if questionary.confirm(f"Kill tmux session for {result.slug}?", default=False).ask():
-            kill(result.slug)
 
 
 def interactive_new() -> None:
@@ -2054,6 +2187,75 @@ def prepare_new_session(
         log=log,
     )
     return LaunchPlan(root=root, args=args)
+
+
+def remove_session(
+    root: Path,
+    name: str,
+    *,
+    force: bool = False,
+    log: Callable[[str], None] | None = None,
+) -> RemoveResult:
+    wt = WORKTREE_DIR / name
+    abs_wt = root / wt
+    if not abs_wt.is_dir():
+        raise CwError(f"no worktree named '{name}' (looked in {wt})")
+    branch = worktree_branch(root, name)
+    if not force:
+        if git(abs_wt, "status", "--porcelain", check=False).strip():
+            raise CwError(f"worktree '{name}' has uncommitted changes; commit them or use 'cw rm {name} --force'")
+        if branch:
+            unpushed = git(root, "rev-list", "--count", branch, "--not", "--remotes", check=False).strip()
+            if int(unpushed or "0") > 0:
+                raise CwError(
+                    f"branch '{branch}' has {unpushed} commit(s) not on any remote; "
+                    f"push them or use 'cw rm {name} --force'"
+                )
+    sess = session_name(root, name)
+    killed_tmux = False
+    if tmux_alive(sess):
+        if log:
+            log(f"killing tmux session '{sess}'")
+        run(["tmux", "kill-session", "-t", f"={sess}"])
+        killed_tmux = True
+    if log:
+        log(f"removing worktree {wt}")
+    args = ["git", "worktree", "remove"]
+    if force:
+        args.append("--force")
+    args.append(str(wt))
+    run(args, cwd=root)
+    branch_deleted = False
+    branch_exists = branch and run(
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=root,
+        check=False,
+    ).returncode == 0
+    if branch_exists:
+        if log:
+            log(f"deleting branch {branch}")
+        run(["git", "branch", "-D", branch], cwd=root)
+        branch_deleted = True
+    elif log:
+        suffix = f" ({branch} not found)" if branch else ""
+        log(f"no backing branch to delete{suffix}")
+    return RemoveResult(
+        slug=name,
+        branch=branch,
+        worktree=wt,
+        killed_tmux=killed_tmux,
+        branch_deleted=branch_deleted,
+    )
+
+
+def kill_session(root: Path, name: str, *, log: Callable[[str], None] | None = None) -> KillResult:
+    sess = session_name(root, name)
+    if not tmux_alive(sess):
+        raise CwError(f"no tmux session named '{sess}'")
+    run(["tmux", "kill-session", "-t", f"={sess}"])
+    if log:
+        log(f"killed tmux session '{sess}' (worktree and branch left intact)")
+    return KillResult(slug=name, session=sess)
 
 
 @app.callback()
@@ -2213,38 +2415,7 @@ def rm(
     name: Annotated[str, typer.Argument(help="Worktree session slug.")],
     force: Annotated[bool, typer.Option("--force", "-f", help="Remove despite dirty state.")] = False,
 ) -> None:
-    root = repo_root()
-    wt = WORKTREE_DIR / name
-    abs_wt = root / wt
-    if not abs_wt.is_dir():
-        raise CwError(f"no worktree named '{name}' (looked in {wt})")
-    branch = worktree_branch(root, name)
-    if not force:
-        if git(abs_wt, "status", "--porcelain", check=False).strip():
-            raise CwError(f"worktree '{name}' has uncommitted changes; commit them or use 'cw rm {name} --force'")
-        if branch:
-            unpushed = git(root, "rev-list", "--count", branch, "--not", "--remotes", check=False).strip()
-            if int(unpushed or "0") > 0:
-                raise CwError(
-                    f"branch '{branch}' has {unpushed} commit(s) not on any remote; "
-                    f"push them or use 'cw rm {name} --force'"
-                )
-    sess = session_name(root, name)
-    if tmux_alive(sess):
-        info(f"killing tmux session '{sess}'")
-        run(["tmux", "kill-session", "-t", f"={sess}"])
-    info(f"removing worktree {wt}")
-    args = ["git", "worktree", "remove"]
-    if force:
-        args.append("--force")
-    args.append(str(wt))
-    run(args, cwd=root)
-    if branch and run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=root, check=False).returncode == 0:
-        info(f"deleting branch {branch}")
-        run(["git", "branch", "-D", branch], cwd=root)
-    else:
-        suffix = f" ({branch} not found)" if branch else ""
-        info(f"no backing branch to delete{suffix}")
+    remove_session(repo_root(), name, force=force, log=info)
 
 
 @app.command("remove")
@@ -2257,13 +2428,7 @@ def remove_cmd(
 
 @app.command()
 def kill(name: Annotated[str, typer.Argument(help="Worktree session slug.")]) -> None:
-    root = repo_root()
-    sess = session_name(root, name)
-    if tmux_alive(sess):
-        run(["tmux", "kill-session", "-t", f"={sess}"])
-        info(f"killed tmux session '{sess}' (worktree and branch left intact)")
-    else:
-        raise CwError(f"no tmux session named '{sess}'")
+    kill_session(repo_root(), name, log=info)
 
 
 @app.command()
