@@ -1276,9 +1276,9 @@ class PruneScreen(ModalScreen[bool]):
     }
 
     #prune-dialog {
-        width: 112;
+        width: 104;
         max-width: 96%;
-        height: 27;
+        height: 22;
         padding: 1 2;
         border: solid #a78bfa;
         background: #111827;
@@ -1318,15 +1318,16 @@ class PruneScreen(ModalScreen[bool]):
         text-style: bold;
     }
 
-    #prune-remove-table,
-    #prune-keep-table {
+    #prune-remove-list,
+    #prune-keep-list {
         height: 1fr;
+        padding: 1;
         border: solid #334155;
         background: #0b1220;
     }
 
     #prune-tmux {
-        height: 5;
+        height: 4;
         margin-top: 1;
         color: #94a3b8;
     }
@@ -1357,20 +1358,14 @@ class PruneScreen(ModalScreen[bool]):
             with Horizontal(id="prune-body"):
                 with Vertical(id="prune-remove-pane"):
                     yield Static("Will Remove", classes="prune-pane-title")
-                    yield DataTable(id="prune-remove-table")
+                    yield Static("", id="prune-remove-list")
                 with Vertical(id="prune-keep-pane"):
                     yield Static("Kept", classes="prune-pane-title")
-                    yield DataTable(id="prune-keep-table")
+                    yield Static("", id="prune-keep-list")
             yield Static("", id="prune-tmux")
-            yield Static("[a] apply  [r] refresh  [esc] back", id="prune-actions")
+            yield Static(Text("[a] apply  [r] refresh  [esc] back"), id="prune-actions")
 
     def on_mount(self) -> None:
-        for table_id in ["#prune-remove-table", "#prune-keep-table"]:
-            table = self.query_one(table_id, DataTable)
-            table.cursor_type = "row"
-            table.zebra_stripes = True
-        self.query_one("#prune-remove-table", DataTable).add_columns("NAME", "BRANCH", "REASON")
-        self.query_one("#prune-keep-table", DataTable).add_columns("NAME", "STATE", "REASON")
         self.preview()
 
     def status(self, message: str) -> None:
@@ -1406,27 +1401,33 @@ class PruneScreen(ModalScreen[bool]):
         return rows
 
     def populate_tables(self) -> None:
-        remove_table = self.query_one("#prune-remove-table", DataTable)
-        keep_table = self.query_one("#prune-keep-table", DataTable)
-        remove_table.clear()
-        keep_table.clear()
-        for row in self.rows:
-            s = row.session
-            if row.action == "remove":
-                remove_table.add_row(s.slug, s.branch, row.reason, key=s.slug)
-            else:
-                keep_table.add_row(s.slug, state_text(s.tmux), row.reason, key=s.slug)
-        if not [row for row in self.rows if row.action == "remove"]:
-            remove_table.add_row("-", "-", "nothing eligible")
-        if not [row for row in self.rows if row.action == "keep"]:
-            keep_table.add_row("-", "-", "nothing kept")
+        remove_rows = [row for row in self.rows if row.action == "remove"]
+        keep_rows = [row for row in self.rows if row.action == "keep"]
+        self.query_one("#prune-remove-list", Static).update(self.rows_text(remove_rows, remove=True))
+        self.query_one("#prune-keep-list", Static).update(self.rows_text(keep_rows, remove=False))
         self.query_one("#prune-tmux", Static).update(self.tmux_text())
+
+    def rows_text(self, rows: list[PruneRow], *, remove: bool) -> str:
+        if not rows:
+            return "[dim]Nothing eligible.[/dim]" if remove else "[dim]Nothing kept.[/dim]"
+        lines = []
+        for row in rows[:6]:
+            s = row.session
+            if remove:
+                lines.append(f"[bold]{escape(s.slug)}[/bold]  [dim]{escape(s.branch)}[/dim]")
+                lines.append(f"  {escape(row.reason)}")
+            else:
+                lines.append(f"[bold]{escape(s.slug)}[/bold]  {escape(row.reason)}")
+        extra = len(rows) - 6
+        if extra > 0:
+            lines.append(f"[dim]+ {extra} more[/dim]")
+        return "\n".join(lines)
 
     def tmux_text(self) -> str:
         lines = machine_worktree_tmux_lines(self.root.name)
         if not lines:
             return "[bold]Machine tmux[/bold]\n  no cw worktree sessions found"
-        return "\n".join(["[bold]Machine tmux[/bold]", *[f"  {line}" for line in lines[:4]]])
+        return "\n".join(["[bold]Machine tmux[/bold]", *[f"  {escape(line)}" for line in lines[:3]]])
 
     def apply_prune_row(self, row: PruneRow) -> bool:
         s = row.session

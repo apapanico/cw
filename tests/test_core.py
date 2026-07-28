@@ -377,8 +377,9 @@ def test_tui_prune_modal_stays_in_dashboard():
             assert type(app.screen).__name__ == "PruneScreen"
             assert not list(app.screen.query(Button))
             assert not list(app.screen.query(RichLog))
-            assert app.screen.query_one("#prune-remove-table", DataTable)
-            assert app.screen.query_one("#prune-keep-table", DataTable)
+            assert not list(app.screen.query(DataTable))
+            assert app.screen.query_one("#prune-remove-list", Static)
+            assert app.screen.query_one("#prune-keep-list", Static)
             assert app.screen.query_one("#prune-actions", Static)
             await pilot.press("escape")
             await pilot.pause()
