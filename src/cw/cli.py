@@ -4,9 +4,10 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Iterable, Optional
+from typing import Annotated, Callable, Iterable, Optional
 
 import questionary
 import typer
@@ -18,7 +19,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, Select, Static
+from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, RichLog, Select, Static
 
 WORKTREE_DIR = Path(".claude/worktrees")
 BRANCH_PREFIX = "claude/"
@@ -33,6 +34,20 @@ app = typer.Typer(
     no_args_is_help=False,
     help="Claude Code worktree session launcher.",
 )
+
+WORD_DELETE_BINDINGS = [
+    Binding("alt+backspace", "word_delete", "delete word", show=False),
+    Binding("option+backspace", "word_delete", "delete word", show=False),
+    Binding("meta+backspace", "word_delete", "delete word", show=False),
+    Binding("ctrl+w", "word_delete", "delete word", show=False),
+]
+
+
+def delete_focused_input_word(focused: object) -> bool:
+    if isinstance(focused, Input):
+        focused.action_delete_left_word()
+        return True
+    return False
 
 
 class CwError(RuntimeError):
@@ -88,10 +103,25 @@ class TuiResult:
     new_options: NewSessionOptions | None = None
     resume_options: ResumeOptions | None = None
     force: bool = False
+    exec_root: Path | None = None
+    exec_args: list[str] | None = None
+
+
+@dataclass(frozen=True)
+class LaunchPlan:
+    root: Path
+    args: list[str]
 
 
 def info(message: str) -> None:
     console.print(f"cw: {message}")
+
+
+def info_with(log: Callable[[str], None] | None, message: str) -> None:
+    if log:
+        log(f"cw: {message}")
+    else:
+        info(message)
 
 
 def die(message: str) -> None:
@@ -118,6 +148,17 @@ def run(
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.PIPE if capture else None,
     )
+
+
+def run_logged(args: list[str], *, cwd: Path | None, log: Callable[[str], None]) -> subprocess.CompletedProcess[str]:
+    cp = run(args, cwd=cwd, check=False, capture=True)
+    for line in (cp.stdout or "").splitlines():
+        log(line)
+    for line in (cp.stderr or "").splitlines():
+        log(line)
+    if cp.returncode != 0:
+        raise subprocess.CalledProcessError(cp.returncode, args, output=cp.stdout, stderr=cp.stderr)
+    return cp
 
 
 def git(root: Path, *args: str, check: bool = True, capture: bool = True) -> str:
@@ -385,6 +426,7 @@ def append_prompt_arg(
     title: str,
     repo: str,
     wt: str,
+    log: Callable[[str], None] | None = None,
 ) -> None:
     prompt_path = default_prompt_path(prompt_file)
     if no_prompt or not prompt_path.is_file():
@@ -400,7 +442,7 @@ def append_prompt_arg(
     )
     if rendered:
         args.extend(["--append-system-prompt", rendered])
-        info(f"  + session prompt from {prompt_path}")
+        info_with(log, f"  + session prompt from {prompt_path}")
 
 
 def execvp(args: list[str]) -> None:
@@ -565,6 +607,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
         Binding("ctrl+enter", "create", "create", priority=True),
         Binding("f5", "create", "create", priority=True),
         Binding("ctrl+s", "create", "create"),
+        *WORD_DELETE_BINDINGS,
     ]
 
     def __init__(self) -> None:
@@ -678,6 +721,9 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
 
     def action_create(self) -> None:
         self.create()
+
+    def action_word_delete(self) -> None:
+        delete_focused_input_word(self.app.focused)
 
     def values(self) -> NewSessionOptions:
         title = self.query_one("#new-session-title", Input).value.strip()
@@ -801,6 +847,7 @@ class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
     BINDINGS = [
         Binding("escape", "cancel", "cancel"),
         Binding("enter", "launch", "launch", priority=True),
+        *WORD_DELETE_BINDINGS,
     ]
 
     def __init__(self, session: WorktreeSession) -> None:
@@ -882,6 +929,9 @@ class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
 
     def action_launch(self) -> None:
         self.launch()
+
+    def action_word_delete(self) -> None:
+        delete_focused_input_word(self.app.focused)
 
     def values(self) -> ResumeOptions:
         conversation = str(self.query_one("#resume-conversation", Select).value)
@@ -1199,6 +1249,101 @@ class StatusScreen(ModalScreen[str | None]):
         self.dismiss("resume")
 
 
+class LaunchProgressScreen(ModalScreen[TuiResult | None]):
+    CSS = """
+    LaunchProgressScreen {
+        align: center middle;
+    }
+
+    #launch-dialog {
+        width: 104;
+        max-width: 96%;
+        height: 24;
+        padding: 1 2;
+        border: solid #38bdf8;
+        background: #111827;
+    }
+
+    #launch-title {
+        height: 1;
+        margin-bottom: 1;
+        color: #e2e8f0;
+        text-style: bold;
+    }
+
+    #launch-log {
+        height: 1fr;
+        border: solid #334155;
+        background: #0b1220;
+    }
+
+    #launch-status {
+        height: 1;
+        margin-top: 1;
+        color: #94a3b8;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "back"),
+    ]
+
+    def __init__(self, options: NewSessionOptions) -> None:
+        super().__init__()
+        self.options = options
+        self.finished = False
+        self.failed = False
+
+    def compose(self) -> ComposeResult:
+        with Container(id="launch-dialog"):
+            yield Static(f"Launching {self.options.title}", id="launch-title")
+            yield RichLog(highlight=True, markup=True, wrap=True, id="launch-log")
+            yield Static("Preparing worktree...", id="launch-status")
+
+    def on_mount(self) -> None:
+        self.query_one("#launch-log", RichLog).write("[bold]cw new[/bold]")
+        thread = threading.Thread(target=self.prepare, name="cw-launch-progress", daemon=True)
+        thread.start()
+
+    def append_log(self, line: str) -> None:
+        self.query_one("#launch-log", RichLog).write(escape(line))
+
+    def set_status(self, message: str) -> None:
+        self.query_one("#launch-status", Static).update(message)
+
+    def prepare(self) -> None:
+        try:
+            plan = prepare_new_session(
+                title_parts=[self.options.title],
+                slug=self.options.slug,
+                branch=self.options.branch,
+                base=self.options.base,
+                mode=self.options.mode,
+                model=self.options.model,
+                effort=self.options.effort,
+                prompt_file=None,
+                no_prompt=not self.options.prompt,
+                native=self.options.native,
+                no_rc=not self.options.rc,
+                log=lambda line: self.app.call_from_thread(self.append_log, line),
+            )
+        except Exception as exc:
+            self.failed = True
+            self.app.call_from_thread(self.append_log, f"cw: {exc}")
+            self.app.call_from_thread(self.set_status, "Launch failed. Press Esc to return.")
+            return
+        self.finished = True
+        self.app.call_from_thread(self.append_log, "cw: handing off to Claude/tmux")
+        self.app.call_from_thread(self.set_status, "Opening Claude...")
+        self.app.call_from_thread(self.dismiss, TuiResult("exec", exec_root=plan.root, exec_args=plan.args))
+
+    def action_cancel(self) -> None:
+        if self.failed:
+            self.dismiss(None)
+        else:
+            self.bell()
+
+
 class CwTui(App[TuiResult | None]):
     TITLE = "cw"
     SUB_TITLE = "Claude worktrees"
@@ -1288,6 +1433,7 @@ class CwTui(App[TuiResult | None]):
         Binding("d", "doctor", "[d] doctor", show=False),
         Binding("?", "help", "[?] help", show=False),
         Binding("q", "quit", "[q] quit", show=False),
+        *WORD_DELETE_BINDINGS,
     ]
 
     def __init__(self, root: Path):
@@ -1426,7 +1572,11 @@ class CwTui(App[TuiResult | None]):
 
     def new_session_done(self, options: NewSessionOptions | None) -> None:
         if options is not None:
-            self.exit(TuiResult("new", new_options=options))
+            self.push_screen(LaunchProgressScreen(options), self.launch_progress_done)
+
+    def launch_progress_done(self, result: TuiResult | None) -> None:
+        if result is not None:
+            self.exit(result)
 
     def action_resume(self) -> None:
         session = self.current_session()
@@ -1483,6 +1633,9 @@ class CwTui(App[TuiResult | None]):
     def action_focus_filter(self) -> None:
         self.query_one("#filter", Input).focus()
 
+    def action_word_delete(self) -> None:
+        delete_focused_input_word(self.focused)
+
     def action_exit_filter(self) -> None:
         if self.query_one("#filter", Input).has_focus:
             self.focus_sessions()
@@ -1512,6 +1665,7 @@ class CwTui(App[TuiResult | None]):
                     f"{key('[p]')}      preview prune, then optionally apply",
                     f"{key('[d]')}      run doctor",
                     f"{key('[q]')}      quit",
+                    f"{key('[ctrl+w]')} delete the previous word in text fields",
                     "",
                     "[dim]The TUI exits into the same command implementations used by the CLI, "
                     "so safety checks stay shared.[/dim]",
@@ -1524,7 +1678,9 @@ def run_tui() -> None:
     result = CwTui(repo_root()).run()
     if result is None:
         raise typer.Exit(0)
-    if result.action == "new" and result.new_options:
+    if result.action == "exec" and result.exec_root and result.exec_args:
+        exec_from(result.exec_root, result.exec_args)
+    elif result.action == "new" and result.new_options:
         opts = result.new_options
         new(
             title=[opts.title],
@@ -1605,6 +1761,87 @@ def interactive_new() -> None:
     )
 
 
+def prepare_new_session(
+    *,
+    title_parts: list[str],
+    slug: str | None,
+    branch: str | None,
+    base: str | None,
+    mode: str | None,
+    model: str | None,
+    effort: str | None,
+    prompt_file: Optional[Path],
+    no_prompt: bool,
+    native: bool,
+    no_rc: bool,
+    log: Callable[[str], None] | None = None,
+) -> LaunchPlan:
+    require_cmd("claude")
+    require_cmd("tmux")
+    session_title = " ".join(title_parts)
+    if not session_title:
+        raise CwError("usage: cw new <title> [--slug <name>] [--base <branch>] [--no-rc]")
+    slug = slug or slugify(session_title)
+    if not slug:
+        raise CwError(f"could not derive a name from title '{session_title}'; pass --slug <name>")
+    mode_value(mode)
+    validate_effort(effort)
+    branch_name = branch or f"{BRANCH_PREFIX}{slug}"
+    cp = run(["git", "check-ref-format", f"refs/heads/{branch_name}"], check=False, capture=True)
+    if cp.returncode != 0:
+        raise CwError(f"invalid branch name: {branch_name}")
+
+    root = repo_root()
+    repo = root.name
+    wt = WORKTREE_DIR / slug
+    sess = session_name(root, slug)
+    if tmux_alive(sess):
+        raise CwError(f"tmux session '{sess}' already exists; use 'cw resume {slug}'")
+    if (root / wt).exists():
+        raise CwError(f"worktree path already exists: {wt} (use 'cw resume {slug}')")
+    if base is None:
+        base = "origin/main"
+        info_with(log, "fetching latest origin/main")
+        if log:
+            run_logged(["git", "fetch", "origin", "main"], cwd=root, log=log)
+        else:
+            run(["git", "fetch", "origin", "main"], cwd=root)
+    info_with(log, f"creating worktree {wt} on branch {branch_name} (base: {base})")
+    info_with(log, f'  title: "{session_title}"  (slug: {slug})')
+    if log:
+        run_logged(["git", "worktree", "add", str(wt), "-b", branch_name, base], cwd=root, log=log)
+    else:
+        run(["git", "worktree", "add", str(wt), "-b", branch_name, base], cwd=root)
+    run(
+        ["git", "config", f"branch.{branch_name}.description", session_title],
+        cwd=root,
+        check=False,
+    )
+    args = claude_base_args(
+        slug=slug,
+        title=session_title,
+        native=native,
+        rc=not no_rc,
+        mode=mode,
+        model=model,
+        effort=effort,
+    )
+    info_with(log, f"launching: {' '.join(args)}")
+    append_prompt_arg(
+        args,
+        prompt_file=prompt_file,
+        no_prompt=no_prompt,
+        slug=slug,
+        branch=branch_name,
+        base=base,
+        title=session_title,
+        repo=repo,
+        wt=str(wt),
+        log=log,
+    )
+    return LaunchPlan(root=root, args=args)
+
+
 @app.callback()
 def main(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is None:
@@ -1642,63 +1879,20 @@ def new(
     no_rc: Annotated[bool, typer.Option("--no-rc", help="Launch without Remote Control.")] = False,
 ) -> None:
     del classic
-    require_cmd("claude")
-    require_cmd("tmux")
-    session_title = " ".join(title)
-    if not session_title:
-        raise CwError("usage: cw new <title> [--slug <name>] [--base <branch>] [--no-rc]")
-    slug = slug or slugify(session_title)
-    if not slug:
-        raise CwError(f"could not derive a name from title '{session_title}'; pass --slug <name>")
-    mode_value(mode)
-    validate_effort(effort)
-    branch_name = branch or f"{BRANCH_PREFIX}{slug}"
-    cp = run(["git", "check-ref-format", f"refs/heads/{branch_name}"], check=False, capture=True)
-    if cp.returncode != 0:
-        raise CwError(f"invalid branch name: {branch_name}")
-
-    root = repo_root()
-    repo = root.name
-    wt = WORKTREE_DIR / slug
-    sess = session_name(root, slug)
-    if tmux_alive(sess):
-        raise CwError(f"tmux session '{sess}' already exists; use 'cw resume {slug}'")
-    if (root / wt).exists():
-        raise CwError(f"worktree path already exists: {wt} (use 'cw resume {slug}')")
-    if base is None:
-        base = "origin/main"
-        info("fetching latest origin/main")
-        run(["git", "fetch", "origin", "main"], cwd=root)
-    info(f"creating worktree {wt} on branch {branch_name} (base: {base})")
-    info(f'  title: "{session_title}"  (slug: {slug})')
-    run(["git", "worktree", "add", str(wt), "-b", branch_name, base], cwd=root)
-    run(
-        ["git", "config", f"branch.{branch_name}.description", session_title],
-        cwd=root,
-        check=False,
-    )
-    args = claude_base_args(
+    plan = prepare_new_session(
+        title_parts=title,
         slug=slug,
-        title=session_title,
-        native=native,
-        rc=not no_rc,
+        branch=branch,
+        base=base,
         mode=mode,
         model=model,
         effort=effort,
-    )
-    info(f"launching: {' '.join(args)}")
-    append_prompt_arg(
-        args,
         prompt_file=prompt_file,
         no_prompt=no_prompt,
-        slug=slug,
-        branch=branch_name,
-        base=base,
-        title=session_title,
-        repo=repo,
-        wt=str(wt),
+        native=native,
+        no_rc=no_rc,
     )
-    exec_from(root, args)
+    exec_from(plan.root, plan.args)
 
 
 @app.command()

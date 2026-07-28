@@ -185,7 +185,7 @@ def test_tui_new_form_autofills_slug():
 def test_tui_new_form_ctrl_enter_creates():
     import asyncio
 
-    from cw.cli import CwTui
+    from cw.cli import CwTui, LaunchPlan
     from textual.widgets import Input
 
     async def run_form_test():
@@ -197,10 +197,24 @@ def test_tui_new_form_ctrl_enter_creates():
             await pilot.pause()
             await pilot.press("ctrl+enter")
             await pilot.pause()
-            assert app._return_value.action == "new"
-            assert app._return_value.new_options.title == "Enter Create"
+            await pilot.pause()
+            assert app._return_value.action == "exec"
+            assert app._return_value.exec_root == Path.cwd()
+            assert app._return_value.exec_args == ["claude", "--worktree", "enter-create"]
 
-    asyncio.run(run_form_test())
+    def fake_prepare_new_session(**kwargs):
+        assert kwargs["title_parts"] == ["Enter Create"]
+        kwargs["log"]("cw: fake launch")
+        return LaunchPlan(Path.cwd(), ["claude", "--worktree", "enter-create"])
+
+    import cw.cli
+
+    original = cw.cli.prepare_new_session
+    cw.cli.prepare_new_session = fake_prepare_new_session
+    try:
+        asyncio.run(run_form_test())
+    finally:
+        cw.cli.prepare_new_session = original
 
 
 def test_tui_remove_modal_returns_force_choice():
@@ -257,6 +271,48 @@ def test_tui_filter_focus_and_exit():
             assert app.query_one("#sessions", DataTable).has_focus
 
     asyncio.run(run_filter_test())
+
+
+def test_tui_input_word_delete_shortcut():
+    import asyncio
+
+    from cw.cli import CwTui
+    from textual.widgets import Input
+
+    async def run_word_delete_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            await pilot.press("n")
+            await pilot.pause()
+            title = app.screen.query_one("#new-session-title", Input)
+            title.value = "Demo Word"
+            title.cursor_position = len(title.value)
+            await pilot.press("ctrl+w")
+            await pilot.pause()
+            assert title.value == "Demo "
+
+    asyncio.run(run_word_delete_test())
+
+
+def test_tui_filter_word_delete_shortcut():
+    import asyncio
+
+    from cw.cli import CwTui
+    from textual.widgets import Input
+
+    async def run_word_delete_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            await pilot.press("/")
+            await pilot.pause()
+            filter_input = app.query_one("#filter", Input)
+            filter_input.value = "demo word"
+            filter_input.cursor_position = len(filter_input.value)
+            await pilot.press("ctrl+w")
+            await pilot.pause()
+            assert filter_input.value == "demo "
+
+    asyncio.run(run_word_delete_test())
 
 
 def test_tui_doctor_modal_stays_in_dashboard():
