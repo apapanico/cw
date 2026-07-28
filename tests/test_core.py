@@ -182,6 +182,7 @@ def test_tui_new_form_autofills_slug():
             assert app.screen.query_one("#new-summary", Static)
             app.screen.query_one("#new-session-title", Input).value = "Demo Form"
             await pilot.pause()
+            assert "Plan" in str(app.screen.query_one("#new-summary", Static).render())
             assert app.screen.query_one("#new-slug", Input).value == "demo-form"
             assert app.screen.values().slug == "demo-form"
             assert app.screen.values().branch is None

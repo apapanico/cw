@@ -114,11 +114,8 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
     }
 
     #new-summary {
-        height: 3;
+        height: 2;
         margin-top: 1;
-        padding: 1;
-        border: solid #334155;
-        background: #0b1220;
         color: #cbd5e1;
     }
 
@@ -313,10 +310,11 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
         if not options.prompt:
             extras.append("no prompt")
         flags = ", ".join([tmux, *extras]) or tmux
+        wt = f"{WORKTREE_DIR}/{slug}"
+        base_note = "fetch latest" if options.base is None else "custom ref"
         preview = [
-            f"[bold]slug[/bold]    {escape(slug)}    [bold]branch[/bold]  {escape(branch)}",
-            f"[bold]base[/bold]    {escape(base)}  [dim]{'fetch first' if options.base is None else 'custom ref'}[/dim]",
-            f"[bold]launch[/bold]  {escape(flags)}",
+            f"[bold]Plan[/bold]  {escape(str(wt))}  ->  {escape(branch)}",
+            f"      base {escape(base)} ({base_note}); {escape(flags)}",
         ]
         self.query_one("#new-branch-preview", Static).update(branch)
         self.query_one("#new-summary", Static).update("\n".join(preview))
