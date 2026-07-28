@@ -243,3 +243,6 @@ Status can either stay as the details pane or open a larger modal:
 │ [r] refresh  [esc] back                                      │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+Decision: `[d]` opens this modal inside `cw dash`; it should not drop to terminal
+output.

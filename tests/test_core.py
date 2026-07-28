@@ -257,3 +257,22 @@ def test_tui_filter_focus_and_exit():
             assert app.query_one("#sessions", DataTable).has_focus
 
     asyncio.run(run_filter_test())
+
+
+def test_tui_doctor_modal_stays_in_dashboard():
+    import asyncio
+
+    from cw.cli import CwTui
+
+    async def run_doctor_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            await pilot.press("d")
+            await pilot.pause()
+            assert type(app.screen).__name__ == "DoctorScreen"
+            await pilot.press("escape")
+            await pilot.pause()
+            assert type(app.screen).__name__ == "Screen"
+            assert app._return_value is None
+
+    asyncio.run(run_doctor_test())

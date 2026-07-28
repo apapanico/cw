@@ -319,6 +319,24 @@ def default_prompt_path(prompt_file: Optional[Path]) -> Path:
     return Path.home() / ".config/cw/session-prompt.md"
 
 
+def doctor_rows() -> list[tuple[str, str]]:
+    rows = []
+    for cmd in ["git", "tmux", "claude", "uv"]:
+        rows.append((cmd, shutil.which(cmd) or "missing"))
+    prompt = default_prompt_path(None)
+    rows.append(("prompt", str(prompt) if prompt.is_file() else f"missing: {prompt}"))
+    excludes = run(["git", "config", "--global", "--get", "core.excludesFile"], check=False, capture=True)
+    excludes_path = (excludes.stdout or "").strip()
+    ignore_ok = "unknown"
+    if excludes_path:
+        ignore_file = Path(excludes_path.replace("~", str(Path.home()), 1))
+        if ignore_file.is_file():
+            ignore_ok = "yes" if ".claude/worktrees/" in ignore_file.read_text() else "missing .claude/worktrees/"
+    rows.append(("global ignore", ignore_ok))
+    rows.append(("cw on PATH", shutil.which("cw") or "missing"))
+    return rows
+
+
 def tmux_flag(native: bool) -> str:
     return "--tmux" if native else "--tmux=classic"
 
@@ -1000,6 +1018,85 @@ class RemoveSessionScreen(ModalScreen[str | None]):
         self.dismiss("force")
 
 
+class DoctorScreen(ModalScreen[None]):
+    CSS = """
+    DoctorScreen {
+        align: center middle;
+    }
+
+    #doctor-dialog {
+        width: 78;
+        max-width: 94%;
+        height: auto;
+        padding: 1 2;
+        border: solid #38bdf8;
+        background: #111827;
+    }
+
+    #doctor-title {
+        height: 1;
+        margin-bottom: 1;
+        color: #e2e8f0;
+        text-style: bold;
+    }
+
+    #doctor-body {
+        min-height: 9;
+        color: #cbd5e1;
+    }
+
+    #doctor-buttons {
+        height: 3;
+        margin-top: 1;
+        align-horizontal: right;
+    }
+
+    Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "close"),
+        Binding("r", "refresh", "refresh"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Container(id="doctor-dialog"):
+            yield Static("Doctor", id="doctor-title")
+            yield Static("", id="doctor-body")
+            with Horizontal(id="doctor-buttons"):
+                yield Button("Refresh", id="doctor-refresh")
+                yield Button("Back", variant="primary", id="doctor-back")
+
+    def on_mount(self) -> None:
+        self.refresh_doctor()
+
+    def body_text(self) -> str:
+        lines = []
+        for name, result in doctor_rows():
+            style = "green" if result and not result.startswith(("missing", "unknown")) else "yellow"
+            lines.append(f"[bold]{name:<14}[/bold] [{style}]{escape(result)}[/{style}]")
+        lines.append("")
+        lines.append("[dim][r] refresh  [esc] back[/dim]")
+        return "\n".join(lines)
+
+    def refresh_doctor(self) -> None:
+        self.query_one("#doctor-body", Static).update(self.body_text())
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "doctor-refresh":
+            self.refresh_doctor()
+        elif event.button.id == "doctor-back":
+            self.dismiss(None)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def action_refresh(self) -> None:
+        self.refresh_doctor()
+
+
 class CwTui(App[TuiResult | None]):
     TITLE = "cw"
     SUB_TITLE = "Claude worktrees"
@@ -1270,7 +1367,7 @@ class CwTui(App[TuiResult | None]):
         self.exit(TuiResult("prune"))
 
     def action_doctor(self) -> None:
-        self.exit(TuiResult("doctor"))
+        self.push_screen(DoctorScreen())
 
     def action_focus_filter(self) -> None:
         self.query_one("#filter", Input).focus()
@@ -1355,8 +1452,6 @@ def run_tui() -> None:
         prune(False)
         if questionary.confirm("Apply prune removals?", default=False).ask():
             prune(True)
-    elif result.action == "doctor":
-        doctor()
 
 
 def interactive_new() -> None:
@@ -1718,19 +1813,8 @@ def doctor() -> None:
     table = Table(show_header=True, header_style="bold")
     table.add_column("Check")
     table.add_column("Result")
-    for cmd in ["git", "tmux", "claude", "uv"]:
-        table.add_row(cmd, shutil.which(cmd) or "missing")
-    prompt = default_prompt_path(None)
-    table.add_row("prompt", str(prompt) if prompt.is_file() else f"missing: {prompt}")
-    excludes = run(["git", "config", "--global", "--get", "core.excludesFile"], check=False, capture=True)
-    excludes_path = (excludes.stdout or "").strip()
-    ignore_ok = "unknown"
-    if excludes_path:
-        ignore_file = Path(excludes_path.replace("~", str(Path.home()), 1))
-        if ignore_file.is_file():
-            ignore_ok = "yes" if ".claude/worktrees/" in ignore_file.read_text() else "missing .claude/worktrees/"
-    table.add_row("global ignore", ignore_ok)
-    table.add_row("cw on PATH", shutil.which("cw") or "missing")
+    for name, result in doctor_rows():
+        table.add_row(name, result)
     out.print(table)
 
 
