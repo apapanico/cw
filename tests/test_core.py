@@ -361,3 +361,22 @@ def test_tui_status_modal_stays_in_dashboard():
             assert app._return_value is None
 
     asyncio.run(run_status_test())
+
+
+def test_tui_prune_modal_stays_in_dashboard():
+    import asyncio
+
+    from cw.cli import CwTui
+
+    async def run_prune_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            await pilot.press("p")
+            await pilot.pause()
+            assert type(app.screen).__name__ == "PruneScreen"
+            await pilot.press("escape")
+            await pilot.pause()
+            assert type(app.screen).__name__ == "Screen"
+            assert app._return_value is None
+
+    asyncio.run(run_prune_test())

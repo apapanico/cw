@@ -493,6 +493,19 @@ def print_sessions(sessions: Iterable[WorktreeSession]) -> None:
         out.print(f"(no worktree sessions under {WORKTREE_DIR})")
 
 
+def machine_worktree_tmux_lines(repo: str) -> list[str]:
+    sigs = run(["tmux", "ls", "-F", "#{session_name}\t#{session_attached}"], check=False, capture=True)
+    rows = []
+    for line in (sigs.stdout or "").splitlines():
+        if "_worktree-" not in line:
+            continue
+        session, attached = line.split("\t", 1)
+        scope = "this-repo" if session.startswith(f"{repo}_worktree-") else "other-repo"
+        state = "attached" if attached.isdigit() and int(attached) > 0 else "detached"
+        rows.append(f"{session:<42} {state:<9} {scope}")
+    return rows
+
+
 def pick_session(root: Path, *, message: str = "Select a session") -> WorktreeSession | None:
     sessions = list_sessions(root)
     if not sessions:
@@ -1249,6 +1262,172 @@ class StatusScreen(ModalScreen[str | None]):
         self.dismiss("resume")
 
 
+class PruneScreen(ModalScreen[bool]):
+    CSS = """
+    PruneScreen {
+        align: center middle;
+    }
+
+    #prune-dialog {
+        width: 96;
+        max-width: 96%;
+        height: 25;
+        padding: 1 2;
+        border: solid #a78bfa;
+        background: #111827;
+    }
+
+    #prune-title {
+        height: 1;
+        margin-bottom: 1;
+        color: #ede9fe;
+        text-style: bold;
+    }
+
+    #prune-log {
+        height: 1fr;
+        border: solid #334155;
+        background: #0b1220;
+    }
+
+    #prune-status {
+        height: 1;
+        margin-top: 1;
+        color: #94a3b8;
+    }
+
+    #prune-buttons {
+        height: 3;
+        margin-top: 1;
+        align-horizontal: right;
+    }
+
+    Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "back"),
+        Binding("a", "apply", "apply"),
+        Binding("r", "refresh", "refresh"),
+    ]
+
+    def __init__(self, root: Path) -> None:
+        super().__init__()
+        self.root = root
+        self.applied = False
+
+    def compose(self) -> ComposeResult:
+        with Container(id="prune-dialog"):
+            yield Static("Prune", id="prune-title")
+            yield RichLog(highlight=True, markup=True, wrap=True, id="prune-log")
+            yield Static("", id="prune-status")
+            with Horizontal(id="prune-buttons"):
+                yield Button("Refresh", id="prune-refresh")
+                yield Button("Back", id="prune-back")
+                yield Button("Apply", variant="primary", id="prune-apply")
+
+    def on_mount(self) -> None:
+        self.preview()
+
+    def log_widget(self) -> RichLog:
+        return self.query_one("#prune-log", RichLog)
+
+    def status(self, message: str) -> None:
+        self.query_one("#prune-status", Static).update(message)
+
+    def write(self, line: str) -> None:
+        self.log_widget().write(escape(line))
+
+    def clear_log(self) -> None:
+        self.log_widget().clear()
+
+    def preview(self) -> None:
+        self.clear_log()
+        removable, kept = self.write_prune_report(apply=False)
+        self.status(f"{removable} removable, {kept} kept. Press [a] or Apply to prune.")
+
+    def write_prune_report(self, *, apply: bool) -> tuple[int, int]:
+        repo = self.root.name
+        sessions = list_sessions(self.root)
+        if apply:
+            self.write("cw: prune: applying - removing eligible worktrees + branches")
+        else:
+            self.write("cw: prune: dry run - nothing removed")
+        removable = 0
+        kept = 0
+        for s in sessions:
+            wt = self.root / WORKTREE_DIR / s.slug
+            if tmux_alive(session_name(self.root, s.slug)):
+                self.write(f"  keep    {s.slug:<22} session alive ({s.tmux})")
+                kept += 1
+                continue
+            if git(wt, "status", "--porcelain", check=False).strip():
+                self.write(f"  keep    {s.slug:<22} uncommitted changes")
+                kept += 1
+                continue
+            unpushed = 0
+            if s.branch and s.branch != "(detached)":
+                unpushed = int(
+                    git(self.root, "rev-list", "--count", s.branch, "--not", "--remotes", check=False).strip()
+                    or "0"
+                )
+            if unpushed > 0:
+                self.write(f"  keep    {s.slug:<22} {unpushed} unpushed commit(s) on {s.branch}")
+                kept += 1
+                continue
+            removable += 1
+            if apply:
+                self.write(f"  remove  {s.slug:<22} ({s.branch})")
+                cp = run(["git", "worktree", "remove", str(WORKTREE_DIR / s.slug)], cwd=self.root, check=False)
+                if cp.returncode == 0 and s.branch and s.branch != "(detached)":
+                    exists = run(
+                        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{s.branch}"],
+                        cwd=self.root,
+                        check=False,
+                    )
+                    if exists.returncode == 0:
+                        run(["git", "branch", "-D", s.branch], cwd=self.root, check=False, capture=True)
+                elif cp.returncode != 0:
+                    self.write(f"  (failed to remove {s.slug} - skipped)")
+                    removable -= 1
+                    kept += 1
+            else:
+                self.write(f"  would remove {s.slug:<18} ({s.branch})")
+        run(["git", "worktree", "prune"], cwd=self.root, check=False)
+        lines = machine_worktree_tmux_lines(repo)
+        if lines:
+            self.write("")
+            self.write("Claude worktree tmux sessions on this machine:")
+            for line in lines:
+                self.write(f"  {line}")
+        return removable, kept
+
+    def apply_prune(self) -> None:
+        self.clear_log()
+        removable, kept = self.write_prune_report(apply=True)
+        self.applied = True
+        self.status(f"Removed {removable}, kept {kept}. Press Esc or Back.")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "prune-refresh":
+            self.preview()
+        elif event.button.id == "prune-back":
+            self.dismiss(self.applied)
+        elif event.button.id == "prune-apply":
+            self.apply_prune()
+
+    def action_close(self) -> None:
+        self.dismiss(self.applied)
+
+    def action_apply(self) -> None:
+        self.apply_prune()
+
+    def action_refresh(self) -> None:
+        self.preview()
+
+
 class LaunchProgressScreen(ModalScreen[TuiResult | None]):
     CSS = """
     LaunchProgressScreen {
@@ -1625,7 +1804,11 @@ class CwTui(App[TuiResult | None]):
             self.exit(result)
 
     def action_prune(self) -> None:
-        self.exit(TuiResult("prune"))
+        self.push_screen(PruneScreen(self.root), self.prune_done)
+
+    def prune_done(self, applied: bool | None) -> None:
+        if applied:
+            self.refresh_sessions()
 
     def action_doctor(self) -> None:
         self.push_screen(DoctorScreen())
@@ -1713,10 +1896,6 @@ def run_tui() -> None:
     elif result.action == "kill" and result.slug:
         if questionary.confirm(f"Kill tmux session for {result.slug}?", default=False).ask():
             kill(result.slug)
-    elif result.action == "prune":
-        prune(False)
-        if questionary.confirm("Apply prune removals?", default=False).ask():
-            prune(True)
 
 
 def interactive_new() -> None:
@@ -2096,15 +2275,11 @@ def prune(
         else:
             out.print(f"  would remove {s.slug:<18} ({s.branch})")
     run(["git", "worktree", "prune"], cwd=root, check=False)
-    sigs = run(["tmux", "ls", "-F", "#{session_name}\t#{session_attached}"], check=False, capture=True)
-    lines = [line for line in (sigs.stdout or "").splitlines() if "_worktree-" in line]
+    lines = machine_worktree_tmux_lines(repo)
     if lines:
         out.print("\nClaude worktree tmux sessions on this machine (kill by hand if stale):")
         for line in lines:
-            session, attached = line.split("\t", 1)
-            scope = "this-repo" if session.startswith(f"{repo}_worktree-") else "other-repo"
-            state = "attached" if attached.isdigit() and int(attached) > 0 else "detached"
-            out.print(f"  {session:<42} {state:<9} {scope}")
+            out.print(f"  {line}")
     if yes:
         info(f"prune: removed {removable}, kept {kept}")
     else:
