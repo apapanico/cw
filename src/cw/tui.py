@@ -74,7 +74,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
     #new-dialog {
         width: 94;
         max-width: 96%;
-        height: 22;
+        height: auto;
         padding: 1 2;
         border: solid #38bdf8;
         background: #111827;
@@ -88,13 +88,13 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
     }
 
     .form-row {
-        height: 3;
+        height: 2;
         margin-top: 0;
     }
 
     .form-cell {
         width: 1fr;
-        height: 3;
+        height: 2;
         margin-right: 1;
     }
 
@@ -114,7 +114,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
     }
 
     #new-summary {
-        height: 4;
+        height: 3;
         margin-top: 1;
         padding: 1;
         border: solid #334155;
@@ -131,7 +131,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
 
     #new-error {
         height: 1;
-        margin-top: 1;
+        margin-top: 0;
         color: #f87171;
     }
 
@@ -314,8 +314,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
             extras.append("no prompt")
         flags = ", ".join([tmux, *extras]) or tmux
         preview = [
-            f"[bold]slug[/bold]    {escape(slug)}",
-            f"[bold]branch[/bold]  {escape(branch)}",
+            f"[bold]slug[/bold]    {escape(slug)}    [bold]branch[/bold]  {escape(branch)}",
             f"[bold]base[/bold]    {escape(base)}  [dim]{'fetch first' if options.base is None else 'custom ref'}[/dim]",
             f"[bold]launch[/bold]  {escape(flags)}",
         ]
