@@ -371,7 +371,7 @@ class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "cancel"),
-        Binding("enter", "launch", "launch", priority=True),
+        Binding("ctrl+enter", "launch", "launch", priority=True),
         *WORD_DELETE_BINDINGS,
     ]
 
@@ -436,7 +436,7 @@ class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
             with Horizontal(classes="resume-row"):
                 yield Checkbox("Remote Control", value=True, compact=True, id="resume-rc")
                 yield Checkbox("session prompt", value=True, compact=True, id="resume-prompt")
-            yield Static(Text("[enter] launch  [esc] back"), id="resume-actions")
+            yield Static(Text("[ctrl+enter] launch  [esc] back"), id="resume-actions")
 
     def on_mount(self) -> None:
         self.query_one("#resume-conversation", Select).focus()

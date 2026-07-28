@@ -451,6 +451,40 @@ def test_tui_status_modal_stays_in_dashboard():
     asyncio.run(run_status_test())
 
 
+def test_tui_resume_modal_uses_ctrl_enter_to_launch():
+    import asyncio
+
+    from cw.models import WorktreeSession
+    from cw.tui import CwTui
+
+    async def run_resume_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            app.sessions = [
+                WorktreeSession(
+                    slug="dead",
+                    branch="claude/dead",
+                    title="Dead",
+                    tmux="dead",
+                    path=Path.cwd() / ".claude/worktrees/dead",
+                )
+            ]
+            app.apply_filter("")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert type(app.screen).__name__ == "ResumeSessionScreen"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app._return_value is None
+            assert type(app.screen).__name__ == "ResumeSessionScreen"
+            await pilot.press("ctrl+enter")
+            await pilot.pause()
+            assert app._return_value.action == "resume"
+            assert app._return_value.slug == "dead"
+
+    asyncio.run(run_resume_test())
+
+
 def test_tui_prune_modal_stays_in_dashboard():
     import asyncio
 
