@@ -979,9 +979,9 @@ class RemoveSessionScreen(ModalScreen[str | None]):
     }
 
     #remove-dialog {
-        width: 74;
+        width: 84;
         max-width: 94%;
-        height: auto;
+        height: 18;
         padding: 1 2;
         border: solid #ef4444;
         background: #111827;
@@ -995,24 +995,23 @@ class RemoveSessionScreen(ModalScreen[str | None]):
     }
 
     #remove-details {
-        min-height: 8;
+        height: 7;
+        padding: 1;
+        border: solid #334155;
+        background: #0b1220;
         color: #cbd5e1;
     }
 
     #remove-warning {
-        min-height: 2;
+        height: 2;
         margin-top: 1;
         color: #fca5a5;
     }
 
-    #remove-buttons {
-        height: 3;
+    #remove-actions {
+        height: 1;
         margin-top: 1;
-        align-horizontal: right;
-    }
-
-    Button {
-        margin-left: 1;
+        color: #cbd5e1;
     }
     """
 
@@ -1032,11 +1031,7 @@ class RemoveSessionScreen(ModalScreen[str | None]):
             yield Static(f"Remove {self.session.slug}", id="remove-title")
             yield Static(self.details_text(), id="remove-details")
             yield Static(self.warning_text(), id="remove-warning")
-            with Horizontal(id="remove-buttons"):
-                yield Button("Cancel", id="remove-cancel")
-                if self.can_remove_normally:
-                    yield Button("Remove", variant="error", id="remove-confirm")
-                yield Button("Force Remove", variant="error", id="remove-force")
+            yield Static(self.actions_text(), id="remove-actions")
 
     @property
     def can_remove_normally(self) -> bool:
@@ -1051,30 +1046,27 @@ class RemoveSessionScreen(ModalScreen[str | None]):
         return self.session.path
 
     def details_text(self) -> str:
+        dirty = f"{self.session.dirty_count} file(s)"
+        unpushed = f"{self.session.unpushed_count} commit(s)"
         return "\n".join(
             [
-                f"[bold]Worktree[/bold]  {self.display_path()}",
-                f"[bold]Branch[/bold]    {self.session.branch}",
-                f"[bold]Tmux[/bold]      {self.session.tmux}",
-                f"[bold]Dirty[/bold]     {self.session.dirty_count} file(s)",
-                f"[bold]Unpushed[/bold]  {self.session.unpushed_count} commit(s)",
+                f"[bold]Worktree[/bold]  {escape(str(self.display_path()))}",
+                f"[bold]Branch[/bold]    {escape(self.session.branch)}",
+                f"[bold]Tmux[/bold]      {escape(self.session.tmux)}",
+                f"[bold]Dirty[/bold]     {dirty:<14} [bold]Unpushed[/bold]  {unpushed}",
                 "",
-                "This will kill tmux, remove the worktree, and delete the branch.",
+                "Removes the worktree and deletes the discovered branch.",
             ]
         )
 
     def warning_text(self) -> str:
         if self.can_remove_normally:
-            return ""
-        return "Normal remove is blocked. Use [f] force only if you accept losing local work."
+            return "[dim]Normal remove is allowed: clean tree, no unpushed commits.[/dim]"
+        return "[bold]Normal remove blocked.[/bold] Force can discard local work."
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "remove-cancel":
-            self.dismiss(None)
-        elif event.button.id == "remove-confirm":
-            self.dismiss("remove")
-        elif event.button.id == "remove-force":
-            self.dismiss("force")
+    def actions_text(self) -> Text:
+        remove = "[r] remove" if self.can_remove_normally else "[r] remove blocked"
+        return Text(f"{remove}  [f] force remove  [esc] back")
 
     def action_cancel(self) -> None:
         self.dismiss(None)

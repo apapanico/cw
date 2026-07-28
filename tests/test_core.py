@@ -221,6 +221,7 @@ def test_tui_remove_modal_returns_force_choice():
     import asyncio
 
     from cw.cli import CwTui, WorktreeSession
+    from textual.widgets import Button, Static
 
     async def run_remove_test():
         app = CwTui(Path.cwd())
@@ -238,6 +239,8 @@ def test_tui_remove_modal_returns_force_choice():
             app.apply_filter("")
             await pilot.press("x")
             await pilot.pause()
+            assert not list(app.screen.query(Button))
+            assert app.screen.query_one("#remove-actions", Static)
             await pilot.press("f")
             await pilot.pause()
             assert app._return_value.action == "rm"
