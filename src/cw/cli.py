@@ -87,6 +87,7 @@ class TuiResult:
     slug: str | None = None
     new_options: NewSessionOptions | None = None
     resume_options: ResumeOptions | None = None
+    force: bool = False
 
 
 def info(message: str) -> None:
@@ -543,7 +544,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "cancel"),
-        Binding("enter", "create", "create", priority=True),
+        Binding("shift+enter", "create", "create", priority=True),
         Binding("ctrl+s", "create", "create"),
     ]
 
@@ -636,9 +637,6 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
                 slug_input.value = derived
             self.auto_slug = derived
         self.update_preview()
-
-    def on_input_submitted(self, _: Input.Submitted) -> None:
-        self.create()
 
     def on_select_changed(self, _: Select.Changed) -> None:
         self.update_preview()
@@ -881,6 +879,123 @@ class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
         self.dismiss(self.values())
 
 
+class RemoveSessionScreen(ModalScreen[str | None]):
+    CSS = """
+    RemoveSessionScreen {
+        align: center middle;
+    }
+
+    #remove-dialog {
+        width: 74;
+        max-width: 94%;
+        height: auto;
+        padding: 1 2;
+        border: solid #ef4444;
+        background: #111827;
+    }
+
+    #remove-title {
+        height: 1;
+        margin-bottom: 1;
+        color: #fecaca;
+        text-style: bold;
+    }
+
+    #remove-details {
+        min-height: 8;
+        color: #cbd5e1;
+    }
+
+    #remove-warning {
+        min-height: 2;
+        margin-top: 1;
+        color: #fca5a5;
+    }
+
+    #remove-buttons {
+        height: 3;
+        margin-top: 1;
+        align-horizontal: right;
+    }
+
+    Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel"),
+        Binding("r", "remove", "remove"),
+        Binding("f", "force", "force"),
+    ]
+
+    def __init__(self, session: WorktreeSession, root: Path) -> None:
+        super().__init__()
+        self.session = session
+        self.root = root
+
+    def compose(self) -> ComposeResult:
+        with Container(id="remove-dialog"):
+            yield Static(f"Remove {self.session.slug}", id="remove-title")
+            yield Static(self.details_text(), id="remove-details")
+            yield Static(self.warning_text(), id="remove-warning")
+            with Horizontal(id="remove-buttons"):
+                yield Button("Cancel", id="remove-cancel")
+                if self.can_remove_normally:
+                    yield Button("Remove", variant="error", id="remove-confirm")
+                yield Button("Force Remove", variant="error", id="remove-force")
+
+    @property
+    def can_remove_normally(self) -> bool:
+        return self.session.dirty_count == 0 and self.session.unpushed_count == 0
+
+    def display_path(self) -> Path:
+        if self.session.path.is_absolute():
+            try:
+                return self.session.path.relative_to(self.root)
+            except ValueError:
+                return self.session.path
+        return self.session.path
+
+    def details_text(self) -> str:
+        return "\n".join(
+            [
+                f"[bold]Worktree[/bold]  {self.display_path()}",
+                f"[bold]Branch[/bold]    {self.session.branch}",
+                f"[bold]Tmux[/bold]      {self.session.tmux}",
+                f"[bold]Dirty[/bold]     {self.session.dirty_count} file(s)",
+                f"[bold]Unpushed[/bold]  {self.session.unpushed_count} commit(s)",
+                "",
+                "This will kill tmux, remove the worktree, and delete the branch.",
+            ]
+        )
+
+    def warning_text(self) -> str:
+        if self.can_remove_normally:
+            return "[r] remove  [f] force remove  [esc] cancel"
+        return "Normal remove is blocked. Use [f] force only if you accept losing local work."
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "remove-cancel":
+            self.dismiss(None)
+        elif event.button.id == "remove-confirm":
+            self.dismiss("remove")
+        elif event.button.id == "remove-force":
+            self.dismiss("force")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_remove(self) -> None:
+        if self.can_remove_normally:
+            self.dismiss("remove")
+        else:
+            self.bell()
+
+    def action_force(self) -> None:
+        self.dismiss("force")
+
+
 class CwTui(App[TuiResult | None]):
     TITLE = "cw"
     SUB_TITLE = "Claude worktrees"
@@ -1105,9 +1220,17 @@ class CwTui(App[TuiResult | None]):
             self.exit(result)
 
     def action_remove(self) -> None:
-        result = self.selected_result("rm")
-        if result:
-            self.exit(result)
+        session = self.current_session()
+        if session is None:
+            self.bell()
+            return
+        self.push_screen(RemoveSessionScreen(session, self.root), lambda choice: self.remove_session_done(session, choice))
+
+    def remove_session_done(self, session: WorktreeSession, choice: str | None) -> None:
+        if choice == "remove":
+            self.exit(TuiResult("rm", session.slug))
+        elif choice == "force":
+            self.exit(TuiResult("rm", session.slug, force=True))
 
     def action_kill(self) -> None:
         result = self.selected_result("kill")
@@ -1133,6 +1256,7 @@ class CwTui(App[TuiResult | None]):
                     "[bold]Keyboard[/bold]",
                     "",
                     f"{key('[n]')}      create a new session",
+                    f"{key('[shift+enter]')} create from the new-session form",
                     f"{key('[enter]')}  resume selected session",
                     f"{key('[s]')}      print selected session status",
                     f"{key('[/]')}      focus the filter",
@@ -1184,8 +1308,7 @@ def run_tui() -> None:
     elif result.action == "status" and result.slug:
         status(result.slug)
     elif result.action == "rm" and result.slug:
-        if questionary.confirm(f"Remove {result.slug}?", default=False).ask():
-            rm(result.slug)
+        rm(result.slug, force=result.force)
     elif result.action == "kill" and result.slug:
         if questionary.confirm(f"Kill tmux session for {result.slug}?", default=False).ask():
             kill(result.slug)

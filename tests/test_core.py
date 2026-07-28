@@ -182,7 +182,7 @@ def test_tui_new_form_autofills_slug():
     asyncio.run(run_form_test())
 
 
-def test_tui_new_form_enter_creates():
+def test_tui_new_form_shift_enter_creates():
     import asyncio
 
     from cw.cli import CwTui
@@ -195,9 +195,39 @@ def test_tui_new_form_enter_creates():
             await pilot.pause()
             app.screen.query_one("#new-session-title", Input).value = "Enter Create"
             await pilot.pause()
-            await pilot.press("enter")
+            await pilot.press("shift+enter")
             await pilot.pause()
             assert app._return_value.action == "new"
             assert app._return_value.new_options.title == "Enter Create"
 
     asyncio.run(run_form_test())
+
+
+def test_tui_remove_modal_returns_force_choice():
+    import asyncio
+
+    from cw.cli import CwTui, WorktreeSession
+
+    async def run_remove_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            app.sessions = [
+                WorktreeSession(
+                    slug="dirty",
+                    branch="claude/dirty",
+                    title="Dirty",
+                    tmux="dead",
+                    path=Path.cwd() / ".claude/worktrees/dirty",
+                    dirty_count=1,
+                )
+            ]
+            app.apply_filter("")
+            await pilot.press("x")
+            await pilot.pause()
+            await pilot.press("f")
+            await pilot.pause()
+            assert app._return_value.action == "rm"
+            assert app._return_value.slug == "dirty"
+            assert app._return_value.force is True
+
+    asyncio.run(run_remove_test())
