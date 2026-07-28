@@ -16,7 +16,7 @@ uv run pytest
 Run `uv run cw dash` to open the Textual session browser. It
 shows the full repo path, a filterable worktree list, selected-session details,
 and bracketed keyboard shortcuts for common actions. Press `[n]` to open an
-in-TUI new-session form with defaults visible up front; `[f5]` creates
+in-TUI new-session form with defaults visible up front; `[ctrl+enter]` creates
 from that form. Press `[/]` to filter and `[enter]` or `[esc]` to return to the
 session table.
 

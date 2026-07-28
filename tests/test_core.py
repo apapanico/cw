@@ -182,7 +182,7 @@ def test_tui_new_form_autofills_slug():
     asyncio.run(run_form_test())
 
 
-def test_tui_new_form_f5_creates():
+def test_tui_new_form_ctrl_enter_creates():
     import asyncio
 
     from cw.cli import CwTui
@@ -195,7 +195,7 @@ def test_tui_new_form_f5_creates():
             await pilot.pause()
             app.screen.query_one("#new-session-title", Input).value = "Enter Create"
             await pilot.pause()
-            await pilot.press("f5")
+            await pilot.press("ctrl+enter")
             await pilot.pause()
             assert app._return_value.action == "new"
             assert app._return_value.new_options.title == "Enter Create"

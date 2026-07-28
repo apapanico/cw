@@ -562,6 +562,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "cancel"),
+        Binding("ctrl+enter", "create", "create", priority=True),
         Binding("f5", "create", "create", priority=True),
         Binding("ctrl+s", "create", "create"),
     ]
@@ -1501,7 +1502,7 @@ class CwTui(App[TuiResult | None]):
                     "[bold]Keyboard[/bold]",
                     "",
                     f"{key('[n]')}      create a new session",
-                    f"{key('[f5]')}     create from the new-session form",
+                    f"{key('[ctrl+enter]')} create from the new-session form",
                     f"{key('[enter]')}  resume selected session",
                     f"{key('[s]')}      print selected session status",
                     f"{key('[/]')}      focus the filter",
