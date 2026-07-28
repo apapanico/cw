@@ -1271,7 +1271,7 @@ class PruneScreen(ModalScreen[bool]):
     #prune-dialog {
         width: 96;
         max-width: 96%;
-        height: 25;
+        height: 22;
         padding: 1 2;
         border: solid #a78bfa;
         background: #111827;
@@ -1296,14 +1296,9 @@ class PruneScreen(ModalScreen[bool]):
         color: #94a3b8;
     }
 
-    #prune-buttons {
-        height: 3;
-        margin-top: 1;
-        align-horizontal: right;
-    }
-
-    Button {
-        margin-left: 1;
+    #prune-actions {
+        height: 1;
+        color: #cbd5e1;
     }
     """
 
@@ -1323,10 +1318,7 @@ class PruneScreen(ModalScreen[bool]):
             yield Static("Prune", id="prune-title")
             yield RichLog(highlight=True, markup=True, wrap=True, id="prune-log")
             yield Static("", id="prune-status")
-            with Horizontal(id="prune-buttons"):
-                yield Button("Refresh", id="prune-refresh")
-                yield Button("Back", id="prune-back")
-                yield Button("Apply", variant="primary", id="prune-apply")
+            yield Static("[a] apply  [r] refresh  [esc] back", id="prune-actions")
 
     def on_mount(self) -> None:
         self.preview()
@@ -1346,7 +1338,7 @@ class PruneScreen(ModalScreen[bool]):
     def preview(self) -> None:
         self.clear_log()
         removable, kept = self.write_prune_report(apply=False)
-        self.status(f"{removable} removable, {kept} kept. Press [a] or Apply to prune.")
+        self.status(f"{removable} removable, {kept} kept.")
 
     def write_prune_report(self, *, apply: bool) -> tuple[int, int]:
         repo = self.root.name
@@ -1408,15 +1400,7 @@ class PruneScreen(ModalScreen[bool]):
         self.clear_log()
         removable, kept = self.write_prune_report(apply=True)
         self.applied = True
-        self.status(f"Removed {removable}, kept {kept}. Press Esc or Back.")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "prune-refresh":
-            self.preview()
-        elif event.button.id == "prune-back":
-            self.dismiss(self.applied)
-        elif event.button.id == "prune-apply":
-            self.apply_prune()
+        self.status(f"Removed {removable}, kept {kept}.")
 
     def action_close(self) -> None:
         self.dismiss(self.applied)

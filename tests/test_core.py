@@ -367,6 +367,7 @@ def test_tui_prune_modal_stays_in_dashboard():
     import asyncio
 
     from cw.cli import CwTui
+    from textual.widgets import Button, Static
 
     async def run_prune_test():
         app = CwTui(Path.cwd())
@@ -374,6 +375,8 @@ def test_tui_prune_modal_stays_in_dashboard():
             await pilot.press("p")
             await pilot.pause()
             assert type(app.screen).__name__ == "PruneScreen"
+            assert not list(app.screen.query(Button))
+            assert app.screen.query_one("#prune-actions", Static)
             await pilot.press("escape")
             await pilot.pause()
             assert type(app.screen).__name__ == "Screen"
