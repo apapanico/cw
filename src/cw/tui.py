@@ -195,7 +195,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
                     )
                 with Vertical(classes="form-cell"):
                     yield Label("Model", classes="field-label")
-                    yield Input(placeholder="blank => Claude default", compact=True, id="new-model")
+                    yield Input(placeholder="blank => Claude default; Happy sonnet", compact=True, id="new-model")
             with Horizontal(classes="form-row"):
                 with Vertical(classes="form-cell"):
                     yield Label("Effort", classes="field-label")
@@ -428,7 +428,7 @@ class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
             with Horizontal(classes="resume-row"):
                 with Vertical(classes="resume-cell"):
                     yield Label("Model", classes="resume-label")
-                    yield Input(placeholder="blank => Claude default", compact=True, id="resume-model")
+                    yield Input(placeholder="blank => Claude default; Happy sonnet", compact=True, id="resume-model")
                 with Vertical(classes="resume-cell"):
                     yield Label("Effort", classes="resume-label")
                     yield Select(

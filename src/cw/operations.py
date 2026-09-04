@@ -25,6 +25,7 @@ from .models import (
 )
 
 console = Console(stderr=True)
+HAPPY_DEFAULT_MODEL = "sonnet"
 
 
 def info(message: str) -> None:
@@ -428,11 +429,12 @@ def claude_base_args(
         args.append("--remote-control")
     if pm and not happy:
         args.extend(["--permission-mode", pm])
-    if model:
+    effective_model = model or (HAPPY_DEFAULT_MODEL if happy else None)
+    if effective_model:
         if happy:
-            args.append(f"--model={model}")
+            args.append(f"--model={effective_model}")
         else:
-            args.extend(["--model", model])
+            args.extend(["--model", effective_model])
     if effort:
         if happy:
             args.append(f"--effort={effort}")

@@ -119,7 +119,7 @@ def interactive_new() -> None:
             "bypass",
         ],
     ).ask()
-    model = questionary.text("Model (blank for Claude default)").ask() or None
+    model = questionary.text("Model (blank for Claude default; Happy sonnet)").ask() or None
     effort = questionary.select(
         "Effort",
         choices=[questionary.Choice("default", value=None), "low", "medium", "high", "xhigh", "max"],
@@ -170,7 +170,7 @@ def new(
     branch: Annotated[Optional[str], typer.Option("--branch", help="Branch name override.")] = None,
     base: Annotated[Optional[str], typer.Option("--base", help="Base ref.")] = None,
     mode: Annotated[Optional[str], typer.Option("--mode", help="Permission mode.")] = None,
-    model: Annotated[Optional[str], typer.Option("--model", help="Claude model.")] = None,
+    model: Annotated[Optional[str], typer.Option("--model", help="Model override.")] = None,
     effort: Annotated[Optional[str], typer.Option("--effort", help="Reasoning effort.")] = None,
     prompt_file: Annotated[
         Optional[Path], typer.Option("--prompt-file", help="Session prompt template.")
@@ -205,7 +205,7 @@ def resume(
     fresh: Annotated[bool, typer.Option("--fresh", help="Start a new conversation.")] = False,
     pick: Annotated[bool, typer.Option("--pick", "-r", help="Open Claude's session picker.")] = False,
     mode: Annotated[Optional[str], typer.Option("--mode", help="Permission mode.")] = None,
-    model: Annotated[Optional[str], typer.Option("--model", help="Claude model.")] = None,
+    model: Annotated[Optional[str], typer.Option("--model", help="Model override.")] = None,
     effort: Annotated[Optional[str], typer.Option("--effort", help="Reasoning effort.")] = None,
     prompt_file: Annotated[
         Optional[Path], typer.Option("--prompt-file", help="Session prompt template.")

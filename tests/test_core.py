@@ -5,6 +5,7 @@ import pytest
 
 from cw.models import ModeError, WorktreeSession
 from cw.operations import (
+    HAPPY_DEFAULT_MODEL,
     apply_shared_state,
     claude_base_args,
     default_choice,
@@ -148,7 +149,7 @@ def test_claude_base_args_happy_swaps_launcher_and_suppresses_remote_control():
     ]
 
 
-def test_claude_base_args_happy_defaults_to_yolo():
+def test_claude_base_args_happy_defaults_to_yolo_and_sonnet():
     assert claude_base_args(
         slug="slug",
         title="My Title",
@@ -158,7 +159,7 @@ def test_claude_base_args_happy_defaults_to_yolo():
         model=None,
         effort=None,
         happy=True,
-    ) == ["happy", "--name", "My Title", "--permission-mode", "yolo", "--yolo"]
+    ) == ["happy", "--name", "My Title", "--permission-mode", "yolo", "--yolo", f"--model={HAPPY_DEFAULT_MODEL}"]
 
 
 def test_happy_mode_value_maps_cw_defaults_to_happy_yolo():
