@@ -125,7 +125,8 @@ def interactive_new() -> None:
         choices=[questionary.Choice("default", value=None), "low", "medium", "high", "xhigh", "max"],
     ).ask()
     native = questionary.confirm("Use native iTerm2 tmux integration?", default=False).ask()
-    rc = questionary.confirm("Enable Remote Control?", default=True).ask()
+    happy = questionary.confirm("Launch with Happy?", default=False).ask()
+    rc = False if happy else questionary.confirm("Enable Remote Control?", default=True).ask()
     use_prompt = questionary.confirm("Inject session prompt if present?", default=True).ask()
     new(
         title=[title],
@@ -139,6 +140,7 @@ def interactive_new() -> None:
         no_prompt=not bool(use_prompt),
         native=bool(native),
         no_rc=not bool(rc),
+        happy=bool(happy),
     )
 
 
@@ -177,6 +179,7 @@ def new(
     native: Annotated[bool, typer.Option("--native", help="Use native tmux integration.")] = False,
     classic: Annotated[bool, typer.Option("--classic", help="Use classic tmux.")] = False,
     no_rc: Annotated[bool, typer.Option("--no-rc", help="Launch without Remote Control.")] = False,
+    happy: Annotated[bool, typer.Option("--happy", help="Launch with Happy instead of Claude.")] = False,
 ) -> None:
     del classic
     plan = prepare_new_session(
@@ -191,6 +194,7 @@ def new(
         no_prompt=no_prompt,
         native=native,
         no_rc=no_rc,
+        happy=happy,
     )
     exec_from(plan.root, plan.args)
 
@@ -210,6 +214,7 @@ def resume(
     native: Annotated[bool, typer.Option("--native", help="Use native tmux integration.")] = False,
     classic: Annotated[bool, typer.Option("--classic", help="Use classic tmux.")] = False,
     no_rc: Annotated[bool, typer.Option("--no-rc", help="Relaunch without Remote Control.")] = False,
+    happy: Annotated[bool, typer.Option("--happy", help="Relaunch with Happy instead of Claude.")] = False,
 ) -> None:
     del classic
     plan = prepare_resume_session(
@@ -223,6 +228,7 @@ def resume(
         no_prompt=no_prompt,
         native=native,
         no_rc=no_rc,
+        happy=happy,
         log=info,
     )
     exec_from(plan.root, plan.args)

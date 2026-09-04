@@ -1,20 +1,27 @@
+import os
 from pathlib import Path
 
 import pytest
 
 from cw.models import ModeError, WorktreeSession
 from cw.operations import (
+    apply_shared_state,
     claude_base_args,
     default_choice,
     display_name,
     exec_from,
+    happy_mode_value,
+    load_shared_state_entries,
     map_mode,
     parse_worktrees_porcelain,
     render_prompt_text,
     session_state,
     session_name,
     slugify,
+    tmux_command_args,
     tmux_flag,
+    validate_shared_state_path,
+    validate_happy_mode,
 )
 
 
@@ -119,6 +126,210 @@ def test_claude_base_args_preserves_remote_control_name_and_prompt_shape():
     ]
 
 
+def test_claude_base_args_happy_swaps_launcher_and_suppresses_remote_control():
+    assert claude_base_args(
+        slug="slug",
+        title="My Title",
+        native=False,
+        rc=True,
+        mode="accept",
+        model="sonnet",
+        effort="high",
+        happy=True,
+    ) == [
+        "happy",
+        "--name",
+        "My Title",
+        "--permission-mode",
+        "acceptEdits",
+        "--permission-mode=acceptEdits",
+        "--model=sonnet",
+        "--effort=high",
+    ]
+
+
+def test_claude_base_args_happy_defaults_to_yolo():
+    assert claude_base_args(
+        slug="slug",
+        title="My Title",
+        native=False,
+        rc=True,
+        mode=None,
+        model=None,
+        effort=None,
+        happy=True,
+    ) == ["happy", "--name", "My Title", "--permission-mode", "yolo", "--yolo"]
+
+
+def test_happy_mode_value_maps_cw_defaults_to_happy_yolo():
+    assert happy_mode_value(None) == "yolo"
+    assert happy_mode_value("default") == "yolo"
+    assert happy_mode_value("bypass") == "yolo"
+    assert happy_mode_value("auto") == "auto"
+    assert happy_mode_value("accept") == "acceptEdits"
+    assert happy_mode_value("plan") == "plan"
+
+
+def test_validate_happy_mode_rejects_claude_only_modes():
+    validate_happy_mode(None)
+    validate_happy_mode("accept")
+    validate_happy_mode("auto")
+    with pytest.raises(Exception, match="does not support"):
+        validate_happy_mode("manual")
+    with pytest.raises(Exception, match="does not support"):
+        validate_happy_mode("dontask")
+
+
+def test_load_shared_state_entries_accepts_array_config(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[[shared_state]]
+path = ".staffreview"
+type = "dir"
+
+[[shared_state]]
+path = ".tool/cache.db"
+type = "file"
+"""
+    )
+
+    entries = load_shared_state_entries(config)
+
+    assert [(entry.path, entry.type) for entry in entries] == [
+        (Path(".staffreview"), "dir"),
+        (Path(".tool/cache.db"), "file"),
+    ]
+
+
+def test_load_shared_state_entries_accepts_named_config(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[shared_state.staffreview]
+path = ".staffreview"
+type = "dir"
+"""
+    )
+
+    entries = load_shared_state_entries(config)
+
+    assert [(entry.path, entry.type) for entry in entries] == [(Path(".staffreview"), "dir")]
+
+
+@pytest.mark.parametrize("path", ["/tmp/state", "../state", "a/../state", ""])
+def test_validate_shared_state_path_rejects_unsafe_paths(path):
+    with pytest.raises(Exception, match="invalid shared_state path"):
+        validate_shared_state_path(path)
+
+
+def test_apply_shared_state_creates_root_target_and_relative_worktree_link(tmp_path):
+    root = tmp_path / "repo"
+    worktree = root / ".claude/worktrees/demo"
+    worktree.mkdir(parents=True)
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[[shared_state]]
+path = ".staffreview"
+type = "dir"
+
+[[shared_state]]
+path = ".tool/cache.db"
+type = "file"
+"""
+    )
+
+    apply_shared_state(root, worktree, config_path=config)
+    apply_shared_state(root, worktree, config_path=config)
+
+    assert (root / ".staffreview").is_dir()
+    assert (root / ".tool/cache.db").is_file()
+    staffreview_link = worktree / ".staffreview"
+    cache_link = worktree / ".tool/cache.db"
+    assert staffreview_link.is_symlink()
+    assert cache_link.is_symlink()
+    assert staffreview_link.resolve() == (root / ".staffreview").resolve()
+    assert cache_link.resolve() == (root / ".tool/cache.db").resolve()
+    assert not os.readlink(staffreview_link).startswith("/")
+    assert not os.readlink(cache_link).startswith("/")
+
+
+def test_apply_shared_state_refuses_existing_worktree_path(tmp_path):
+    root = tmp_path / "repo"
+    worktree = root / ".claude/worktrees/demo"
+    (root / ".staffreview").mkdir(parents=True)
+    (worktree / ".staffreview").mkdir(parents=True)
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[[shared_state]]
+path = ".staffreview"
+type = "dir"
+"""
+    )
+
+    with pytest.raises(Exception, match="already exists"):
+        apply_shared_state(root, worktree, config_path=config)
+
+
+def test_apply_shared_state_refuses_wrong_symlink(tmp_path):
+    root = tmp_path / "repo"
+    worktree = root / ".claude/worktrees/demo"
+    other = tmp_path / "other"
+    (root / ".staffreview").mkdir(parents=True)
+    other.mkdir()
+    worktree.mkdir(parents=True)
+    (worktree / ".staffreview").symlink_to(other, target_is_directory=True)
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[[shared_state]]
+path = ".staffreview"
+type = "dir"
+"""
+    )
+
+    with pytest.raises(Exception, match="links elsewhere"):
+        apply_shared_state(root, worktree, config_path=config)
+
+
+def test_tmux_command_args_runs_command_from_worktree():
+    import os
+
+    old_env = os.environ.copy()
+    os.environ.clear()
+    os.environ.update({"PATH": "/bin", "HAPPY_SERVER_URL": "https://happy.example", "OTHER": "ignored"})
+    try:
+        args = tmux_command_args(
+            "repo_worktree-demo",
+            Path("/repo/.claude/worktrees/demo"),
+            ["happy", "--name", "Demo Session", "--permission-mode", "yolo", "--yolo"],
+        )
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+    assert args == [
+        "tmux",
+        "new-session",
+        "-A",
+        "-s",
+        "repo_worktree-demo",
+        "-c",
+        "/repo/.claude/worktrees/demo",
+        "env PATH=/bin HAPPY_SERVER_URL=https://happy.example happy --name 'Demo Session' --permission-mode yolo --yolo",
+    ]
+
+
+def test_tmux_command_args_quotes_command_env_and_worktree():
+    assert tmux_command_args(
+        "repo_worktree-demo",
+        Path("/repo/.claude/worktrees/demo"),
+        ["happy", "--name", "Demo Session", "--permission-mode", "yolo", "--yolo"],
+    )[:7] == ["tmux", "new-session", "-A", "-s", "repo_worktree-demo", "-c", "/repo/.claude/worktrees/demo"]
+
+
 def test_session_state_labels():
     base = {
         "slug": "s",
@@ -187,6 +398,29 @@ def test_tui_new_form_autofills_slug():
             assert app.screen.values().slug == "demo-form"
             assert app.screen.values().branch is None
             assert app.screen.values().base is None
+
+    asyncio.run(run_form_test())
+
+
+def test_tui_new_form_happy_disables_remote():
+    import asyncio
+
+    from cw.tui import CwTui
+    from textual.widgets import Checkbox
+
+    async def run_form_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            await pilot.press("n")
+            await pilot.pause()
+            happy = app.screen.query_one("#new-happy", Checkbox)
+            remote = app.screen.query_one("#new-rc", Checkbox)
+            happy.value = True
+            await pilot.pause()
+            assert remote.disabled
+            assert not remote.value
+            assert app.screen.values().happy
+            assert not app.screen.values().rc
 
     asyncio.run(run_form_test())
 
@@ -481,6 +715,40 @@ def test_tui_resume_modal_uses_ctrl_enter_to_launch():
             await pilot.pause()
             assert app._return_value.action == "resume"
             assert app._return_value.slug == "dead"
+
+    asyncio.run(run_resume_test())
+
+
+def test_tui_resume_form_happy_disables_remote():
+    import asyncio
+
+    from cw.models import WorktreeSession
+    from cw.tui import CwTui
+    from textual.widgets import Checkbox
+
+    async def run_resume_test():
+        app = CwTui(Path.cwd())
+        async with app.run_test() as pilot:
+            app.sessions = [
+                WorktreeSession(
+                    slug="dead",
+                    branch="claude/dead",
+                    title="Dead",
+                    tmux="dead",
+                    path=Path.cwd() / ".claude/worktrees/dead",
+                )
+            ]
+            app.apply_filter("")
+            await pilot.press("enter")
+            await pilot.pause()
+            happy = app.screen.query_one("#resume-happy", Checkbox)
+            remote = app.screen.query_one("#resume-rc", Checkbox)
+            happy.value = True
+            await pilot.pause()
+            assert remote.disabled
+            assert not remote.value
+            assert app.screen.values().happy
+            assert not app.screen.values().rc
 
     asyncio.run(run_resume_test())
 

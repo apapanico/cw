@@ -20,6 +20,7 @@ from .operations import (
     doctor_rows,
     exec_from,
     git,
+    happy_mode_value,
     kill_session,
     last_commit,
     list_sessions,
@@ -216,6 +217,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
                     yield Label("Launch", classes="field-label")
                     with Horizontal(classes="toggle-row"):
                         yield Checkbox("classic", value=True, compact=True, id="new-classic")
+                        yield Checkbox("happy", value=False, compact=True, id="new-happy")
                         yield Checkbox("remote", value=True, compact=True, id="new-rc")
                         yield Checkbox("prompt", value=True, compact=True, id="new-prompt")
             yield Static("", id="new-summary")
@@ -264,7 +266,8 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
         model = self.query_one("#new-model", Input).value.strip() or None
         effort = str(self.query_one("#new-effort", Select).value)
         classic = self.query_one("#new-classic", Checkbox).value
-        rc = self.query_one("#new-rc", Checkbox).value
+        happy = self.query_one("#new-happy", Checkbox).value
+        rc = self.query_one("#new-rc", Checkbox).value and not happy
         prompt = self.query_one("#new-prompt", Checkbox).value
         return NewSessionOptions(
             title=title,
@@ -276,6 +279,7 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
             effort=default_choice(effort),
             native=not classic,
             rc=rc,
+            happy=happy,
             prompt=prompt,
         )
 
@@ -293,19 +297,27 @@ class NewSessionScreen(ModalScreen[NewSessionOptions | None]):
         self.dismiss(options)
 
     def update_preview(self) -> None:
+        happy_checkbox = self.query_one("#new-happy", Checkbox)
+        rc_checkbox = self.query_one("#new-rc", Checkbox)
+        rc_checkbox.disabled = happy_checkbox.value
+        if happy_checkbox.value:
+            rc_checkbox.value = False
         options = self.values()
         slug = options.slug or slugify(options.title) or "<slug>"
         branch = options.branch or f"{BRANCH_PREFIX}{slug}"
         base = options.base or "origin/main"
         tmux = "native tmux" if options.native else "classic tmux"
         extras = []
-        if options.mode:
+        if options.mode and not options.happy:
             extras.append(f"mode {options.mode}")
         if options.model:
             extras.append(f"model {options.model}")
         if options.effort:
             extras.append(f"effort {options.effort}")
-        if not options.rc:
+        if options.happy:
+            extras.append("happy mobile")
+            extras.append(f"mode {happy_mode_value(options.mode)}")
+        elif not options.rc:
             extras.append("no remote control")
         if not options.prompt:
             extras.append("no prompt")
@@ -434,12 +446,17 @@ class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
                         id="resume-effort",
                     )
             with Horizontal(classes="resume-row"):
+                yield Checkbox("Happy", value=False, compact=True, id="resume-happy")
                 yield Checkbox("Remote Control", value=True, compact=True, id="resume-rc")
                 yield Checkbox("session prompt", value=True, compact=True, id="resume-prompt")
             yield Static(Text("[ctrl+enter] launch  [esc] back"), id="resume-actions")
 
     def on_mount(self) -> None:
         self.query_one("#resume-conversation", Select).focus()
+        self.update_remote_state()
+
+    def on_checkbox_changed(self, _: Checkbox.Changed) -> None:
+        self.update_remote_state()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -455,18 +472,31 @@ class ResumeSessionScreen(ModalScreen[ResumeOptions | None]):
         mode = str(self.query_one("#resume-mode", Select).value)
         model = self.query_one("#resume-model", Input).value.strip() or None
         effort = str(self.query_one("#resume-effort", Select).value)
+        happy = self.query_one("#resume-happy", Checkbox).value
         return ResumeOptions(
             fresh=conversation == "fresh",
             pick=conversation == "pick",
             mode=default_choice(mode),
             model=model,
             effort=default_choice(effort),
-            rc=self.query_one("#resume-rc", Checkbox).value,
+            rc=self.query_one("#resume-rc", Checkbox).value and not happy,
+            happy=happy,
             prompt=self.query_one("#resume-prompt", Checkbox).value,
         )
 
     def launch(self) -> None:
         self.dismiss(self.values())
+
+    def update_remote_state(self) -> None:
+        happy_checkbox = self.query_one("#resume-happy", Checkbox)
+        rc_checkbox = self.query_one("#resume-rc", Checkbox)
+        rc_checkbox.disabled = happy_checkbox.value
+        if happy_checkbox.value:
+            rc_checkbox.value = False
+        note = "Relaunch Happy on this worktree; Remote Control is disabled."
+        if not happy_checkbox.value:
+            note = "No live tmux session exists. Relaunch Claude on this worktree."
+        self.query_one("#resume-note", Static).update(note)
 
 
 class RemoveSessionScreen(ModalScreen[str | None]):
@@ -1074,6 +1104,7 @@ class LaunchProgressScreen(ModalScreen[TuiResult | None]):
                 no_prompt=not self.options.prompt,
                 native=self.options.native,
                 no_rc=not self.options.rc,
+                happy=self.options.happy,
                 log=lambda line: self.app.call_from_thread(self.append_log, line),
             )
         except Exception as exc:
@@ -1082,8 +1113,9 @@ class LaunchProgressScreen(ModalScreen[TuiResult | None]):
             self.app.call_from_thread(self.set_status, "Launch failed. Press Esc to return.")
             return
         self.finished = True
-        self.app.call_from_thread(self.append_log, "cw: handing off to Claude/tmux")
-        self.app.call_from_thread(self.set_status, "Opening Claude...")
+        launcher = "Happy" if self.options.happy else "Claude"
+        self.app.call_from_thread(self.append_log, f"cw: handing off to {launcher}/tmux")
+        self.app.call_from_thread(self.set_status, f"Opening {launcher}...")
         self.app.call_from_thread(self.dismiss, TuiResult("exec", exec_root=plan.root, exec_args=plan.args))
 
     def action_cancel(self) -> None:
@@ -1499,5 +1531,6 @@ def run_tui() -> None:
             prompt_file=None,
             no_prompt=not opts.prompt if opts else False,
             no_rc=not opts.rc if opts else False,
+            happy=opts.happy if opts else False,
         )
         exec_from(plan.root, plan.args)

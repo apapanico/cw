@@ -4,6 +4,8 @@ import os
 import shutil
 import subprocess
 import re
+import shlex
+import tomllib
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -18,6 +20,7 @@ from .models import (
     LaunchPlan,
     ModeError,
     RemoveResult,
+    SharedStateEntry,
     WorktreeSession,
 )
 
@@ -120,6 +123,26 @@ def validate_effort(effort: str | None) -> str:
     if value not in EFFORTS:
         raise CwError(f"unknown --effort '{value}' (low|medium|high|xhigh|max)")
     return value
+
+
+def validate_happy_mode(mode: str | None) -> None:
+    if mode in {None, "", "default", "auto", "accept", "plan", "bypass"}:
+        return
+    raise CwError(f"--happy does not support --mode '{mode}' (use default|accept|plan|auto|bypass)")
+
+
+def happy_mode_value(mode: str | None) -> str:
+    match mode:
+        case None | "" | "default" | "bypass":
+            return "yolo"
+        case "auto":
+            return "auto"
+        case "accept":
+            return "acceptEdits"
+        case "plan":
+            return "plan"
+        case _:
+            raise CwError(f"--happy does not support --mode '{mode}' (use default|accept|plan|auto|bypass)")
 
 
 def default_choice(value: str | None) -> str | None:
@@ -267,9 +290,88 @@ def default_prompt_path(prompt_file: Optional[Path]) -> Path:
     return Path.home() / ".config/cw/session-prompt.md"
 
 
+def default_config_path() -> Path:
+    return Path.home() / ".config/cw/config.toml"
+
+
+def validate_shared_state_path(value: str) -> Path:
+    path = Path(value)
+    if not value or path.is_absolute() or ".." in path.parts:
+        raise CwError(f"invalid shared_state path '{value}' (must be relative and stay inside the repo)")
+    if path == Path("."):
+        raise CwError("invalid shared_state path '.'")
+    return path
+
+
+def load_shared_state_entries(config_path: Path | None = None) -> list[SharedStateEntry]:
+    path = config_path or default_config_path()
+    if not path.is_file():
+        return []
+    with path.open("rb") as f:
+        data = tomllib.load(f)
+    raw_entries = data.get("shared_state", [])
+    if isinstance(raw_entries, dict):
+        entries = list(raw_entries.values())
+    elif isinstance(raw_entries, list):
+        entries = raw_entries
+    else:
+        raise CwError("shared_state must be an array of tables")
+
+    parsed = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise CwError("each shared_state entry must be a table")
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str):
+            raise CwError("each shared_state entry needs a string path")
+        state_type = entry.get("type", "dir")
+        if state_type not in {"dir", "file"}:
+            raise CwError(f"shared_state path '{raw_path}' has unknown type '{state_type}' (dir|file)")
+        parsed.append(SharedStateEntry(path=validate_shared_state_path(raw_path), type=state_type))
+    return parsed
+
+
+def apply_shared_state(
+    root: Path,
+    worktree: Path,
+    *,
+    config_path: Path | None = None,
+    log: Callable[[str], None] | None = None,
+) -> None:
+    entries = load_shared_state_entries(config_path)
+    if not entries:
+        return
+    for entry in entries:
+        root_target = root / entry.path
+        worktree_link = worktree / entry.path
+        if not root_target.exists():
+            root_target.parent.mkdir(parents=True, exist_ok=True)
+            if entry.type == "dir":
+                root_target.mkdir()
+            else:
+                root_target.touch()
+            info_with(log, f"  + shared state created {entry.path}")
+        elif entry.type == "dir" and not root_target.is_dir():
+            raise CwError(f"shared_state path '{entry.path}' is configured as dir but root target is not a directory")
+        elif entry.type == "file" and not root_target.is_file():
+            raise CwError(f"shared_state path '{entry.path}' is configured as file but root target is not a file")
+
+        if worktree_link.is_symlink():
+            if worktree_link.resolve() == root_target.resolve():
+                continue
+            raise CwError(f"shared_state path already links elsewhere in worktree: {entry.path}")
+        if worktree_link.exists():
+            raise CwError(f"shared_state path already exists in worktree: {entry.path}")
+
+        worktree_link.parent.mkdir(parents=True, exist_ok=True)
+        relative_target = os.path.relpath(root_target, start=worktree_link.parent)
+        worktree_link.symlink_to(relative_target, target_is_directory=entry.type == "dir")
+        info_with(log, f"  + shared state linked {entry.path} -> {relative_target}")
+
+
 def doctor_rows() -> list[tuple[str, str]]:
     rows = []
-    for cmd in ["git", "tmux", "claude", "uv"]:
+    for cmd in ["git", "tmux", "claude", "happy", "uv"]:
         rows.append((cmd, shutil.which(cmd) or "missing"))
     prompt = default_prompt_path(None)
     rows.append(("prompt", str(prompt) if prompt.is_file() else f"missing: {prompt}"))
@@ -307,19 +409,46 @@ def claude_base_args(
     mode: str | None,
     model: str | None,
     effort: str | None,
+    happy: bool = False,
 ) -> list[str]:
     pm = mode_value(mode)
     validate_effort(effort)
-    args = ["claude", "--worktree", slug, tmux_flag(native), "--name", title]
-    if rc:
+    launcher = "happy" if happy else "claude"
+    if happy:
+        args = [launcher, "--name", title]
+        happy_mode = happy_mode_value(mode)
+        if happy_mode == "yolo":
+            args.extend(["--permission-mode", "yolo", "--yolo"])
+        else:
+            args.extend(["--permission-mode", happy_mode])
+            args.append(f"--permission-mode={happy_mode}")
+    else:
+        args = [launcher, "--worktree", slug, tmux_flag(native), "--name", title]
+    if rc and not happy:
         args.append("--remote-control")
-    if pm:
+    if pm and not happy:
         args.extend(["--permission-mode", pm])
     if model:
-        args.extend(["--model", model])
+        if happy:
+            args.append(f"--model={model}")
+        else:
+            args.extend(["--model", model])
     if effort:
-        args.extend(["--effort", effort])
+        if happy:
+            args.append(f"--effort={effort}")
+        else:
+            args.extend(["--effort", effort])
     return args
+
+
+def launch_env_args() -> list[str]:
+    prefixes = ("ANTHROPIC_", "CLAUDE_", "HAPPY_")
+    names = ["PATH", *[name for name in os.environ if name.startswith(prefixes)]]
+    return [f"{name}={os.environ[name]}" for name in names if name in os.environ]
+
+
+def tmux_command_args(session: str, cwd: Path, command: list[str]) -> list[str]:
+    return ["tmux", "new-session", "-A", "-s", session, "-c", str(cwd), shlex.join(["env", *launch_env_args(), *command])]
 
 
 def append_prompt_arg(
@@ -409,13 +538,16 @@ def prepare_new_session(
     no_prompt: bool,
     native: bool,
     no_rc: bool,
+    happy: bool = False,
     log: Callable[[str], None] | None = None,
 ) -> LaunchPlan:
-    require_cmd("claude")
+    require_cmd("happy" if happy else "claude")
     require_cmd("tmux")
     session_title = " ".join(title_parts)
     if not session_title:
         raise CwError("usage: cw new <title> [--slug <name>] [--base <branch>] [--no-rc]")
+    if happy:
+        validate_happy_mode(mode)
     slug = slug or slugify(session_title)
     if not slug:
         raise CwError(f"could not derive a name from title '{session_title}'; pass --slug <name>")
@@ -452,16 +584,17 @@ def prepare_new_session(
         cwd=root,
         check=False,
     )
+    apply_shared_state(root, root / wt, log=log)
     args = claude_base_args(
         slug=slug,
         title=session_title,
         native=native,
         rc=not no_rc,
+        happy=happy,
         mode=mode,
         model=model,
         effort=effort,
     )
-    info_with(log, f"launching: {' '.join(args)}")
     append_prompt_arg(
         args,
         prompt_file=prompt_file,
@@ -474,6 +607,9 @@ def prepare_new_session(
         wt=str(wt),
         log=log,
     )
+    if happy:
+        args = tmux_command_args(sess, root / wt, args)
+    info_with(log, f"launching: {' '.join(args)}")
     return LaunchPlan(root=root, args=args)
 
 
@@ -489,11 +625,14 @@ def prepare_resume_session(
     no_prompt: bool = False,
     native: bool = False,
     no_rc: bool = False,
+    happy: bool = False,
     log: Callable[[str], None] | None = None,
 ) -> LaunchPlan:
     if fresh and pick:
         raise CwError("--fresh and --pick are mutually exclusive")
     require_cmd("tmux")
+    if happy:
+        validate_happy_mode(mode)
     mode_value(mode)
     validate_effort(effort)
     root = repo_root()
@@ -506,15 +645,18 @@ def prepare_resume_session(
     wt = WORKTREE_DIR / name
     if not (root / wt).is_dir():
         raise CwError(f"no tmux session and no worktree named '{name}' (looked in {wt})")
-    require_cmd("claude")
+    require_cmd("happy" if happy else "claude")
     branch = worktree_branch(root, name)
     title = branch_description(root, branch) or display_name(root, name)
-    info_with(log, f"no live tmux session; relaunching claude on existing worktree {wt}")
+    launcher = "happy" if happy else "claude"
+    info_with(log, f"no live tmux session; relaunching {launcher} on existing worktree {wt}")
+    apply_shared_state(root, root / wt, log=log)
     args = claude_base_args(
         slug=name,
         title=title,
         native=native,
         rc=not no_rc,
+        happy=happy,
         mode=mode,
         model=model,
         effort=effort,
@@ -523,7 +665,6 @@ def prepare_resume_session(
         args.append("--resume")
     elif not fresh:
         args.append("--continue")
-    info_with(log, f"launching: {' '.join(args)}")
     upstream = git(root, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}", check=False).strip()
     base = upstream or "origin/main"
     append_prompt_arg(
@@ -538,6 +679,9 @@ def prepare_resume_session(
         wt=str(wt),
         log=log,
     )
+    if happy:
+        args = tmux_command_args(sess, root / wt, args)
+    info_with(log, f"launching: {' '.join(args)}")
     return LaunchPlan(root=root, args=args)
 
 

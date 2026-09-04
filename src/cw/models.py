@@ -30,6 +30,12 @@ class WorktreeSession:
 
 
 @dataclass(frozen=True)
+class SharedStateEntry:
+    path: Path
+    type: str
+
+
+@dataclass(frozen=True)
 class NewSessionOptions:
     title: str
     slug: str | None = None
@@ -40,6 +46,7 @@ class NewSessionOptions:
     effort: str | None = None
     native: bool = False
     rc: bool = True
+    happy: bool = False
     prompt: bool = True
 
 
@@ -51,6 +58,7 @@ class ResumeOptions:
     model: str | None = None
     effort: str | None = None
     rc: bool = True
+    happy: bool = False
     prompt: bool = True
 
 

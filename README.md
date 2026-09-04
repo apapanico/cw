@@ -33,3 +33,23 @@ uv tool install --editable /Users/alexp/Projects/cw
 
 The current Bash `/Users/alexp/bin/cw` should stay in place until the uv tool
 install is verified and PATH ordering is intentional.
+
+## Shared State
+
+`cw` can symlink selected repo-local state into each worktree. Configure
+allowlisted paths in `~/.config/cw/config.toml`:
+
+```toml
+[[shared_state]]
+path = ".staffreview"
+type = "dir"
+
+[[shared_state]]
+path = ".env.local"
+type = "file"
+```
+
+Paths must be relative and stay inside the repo. `cw new` creates the root
+target if needed, then creates a relative symlink in the new worktree. `cw
+resume` repairs/checks links before relaunching a dead session. Existing real
+files, directories, or wrong symlinks in the worktree are never overwritten.
