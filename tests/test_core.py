@@ -6,16 +6,19 @@ import pytest
 from cw.models import ModeError, WorktreeSession
 from cw.operations import (
     HAPPY_DEFAULT_MODEL,
+    PROJECT_CONFIG,
     apply_shared_state,
     claude_base_args,
     default_choice,
     display_name,
     exec_from,
     happy_mode_value,
+    inferred_repo_root,
     load_shared_state_entries,
     map_mode,
     parse_worktrees_porcelain,
     render_prompt_text,
+    repo_root,
     session_state,
     session_name,
     slugify,
@@ -93,6 +96,37 @@ detached
     assert parse_worktrees_porcelain(text) == [
         (Path("/repo/.claude/worktrees/one"), "claude/one"),
         (Path("/repo/.claude/worktrees/two"), "(detached)"),
+    ]
+
+
+def test_inferred_repo_root_recovers_from_worktree_path():
+    assert inferred_repo_root(Path("/repo/.claude/worktrees/demo")) == Path("/repo")
+    assert inferred_repo_root(Path("/repo/.claude/worktrees/demo/subdir")) == Path("/repo")
+    assert inferred_repo_root(Path("/repo/src")) is None
+
+
+def test_repo_root_falls_back_to_inferred_root_when_cwd_is_deleted(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    deleted_worktree = root / ".claude/worktrees/demo"
+    calls = []
+
+    monkeypatch.setattr("cw.operations.current_path", lambda: deleted_worktree)
+
+    def fake_run(args, *, check=True, capture=False, cwd=None):
+        calls.append(args)
+        if args[:2] == ["git", "worktree"]:
+            return type("CP", (), {"returncode": 1, "stdout": "", "stderr": "getcwd failed"})()
+        if args[:3] == ["git", "-C", str(root)]:
+            return type("CP", (), {"returncode": 0, "stdout": f"worktree {root}\n", "stderr": ""})()
+        raise AssertionError(args)
+
+    monkeypatch.setattr("cw.operations.run", fake_run)
+
+    assert repo_root() == root.resolve()
+    assert calls == [
+        ["git", "worktree", "list", "--porcelain"],
+        ["git", "-C", str(root.resolve()), "worktree", "list", "--porcelain"],
     ]
 
 
@@ -218,6 +252,30 @@ type = "dir"
     assert [(entry.path, entry.type) for entry in entries] == [(Path(".staffreview"), "dir")]
 
 
+def test_load_shared_state_entries_accepts_project_config_paths(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[shared_state]
+
+[[shared_state.paths]]
+path = ".staffreview"
+type = "dir"
+
+[[shared_state.paths]]
+path = ".env.local"
+type = "file"
+"""
+    )
+
+    entries = load_shared_state_entries(config)
+
+    assert [(entry.path, entry.type) for entry in entries] == [
+        (Path(".staffreview"), "dir"),
+        (Path(".env.local"), "file"),
+    ]
+
+
 @pytest.mark.parametrize("path", ["/tmp/state", "../state", "a/../state", ""])
 def test_validate_shared_state_path_rejects_unsafe_paths(path):
     with pytest.raises(Exception, match="invalid shared_state path"):
@@ -254,6 +312,28 @@ type = "file"
     assert cache_link.resolve() == (root / ".tool/cache.db").resolve()
     assert not os.readlink(staffreview_link).startswith("/")
     assert not os.readlink(cache_link).startswith("/")
+
+
+def test_apply_shared_state_reads_project_config_by_default(tmp_path):
+    root = tmp_path / "repo"
+    worktree = root / ".claude/worktrees/demo"
+    worktree.mkdir(parents=True)
+    config = root / PROJECT_CONFIG
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        """
+[shared_state]
+
+[[shared_state.paths]]
+path = ".staffreview"
+type = "dir"
+"""
+    )
+
+    apply_shared_state(root, worktree)
+
+    assert (worktree / ".staffreview").is_symlink()
+    assert (worktree / ".staffreview").resolve() == (root / ".staffreview").resolve()
 
 
 def test_apply_shared_state_refuses_existing_worktree_path(tmp_path):

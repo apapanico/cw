@@ -42,6 +42,7 @@ from .operations import (
     parse_worktrees_porcelain,
     prepare_new_session,
     prepare_resume_session,
+    project_config_path,
     remove_session,
     render_prompt_text,
     repo_root,
@@ -161,6 +162,37 @@ def dash() -> None:
 def tui() -> None:
     """Open dashboard TUI."""
     run_tui()
+
+
+@app.command()
+def init(
+    force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite existing .cw/config.toml.")] = False,
+) -> None:
+    """Create project-local cw configuration."""
+    root = repo_root()
+    config = project_config_path(root)
+    if config.exists() and not force:
+        raise CwError(f"project config already exists: {config.relative_to(root)}")
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        """# Project-local cw configuration.
+#
+# Shared state paths are symlinked from the main worktree into cw worktrees.
+# Only add paths that are intentionally project-local runtime state.
+
+[shared_state]
+
+[[shared_state.paths]]
+path = ".staffreview"
+type = "dir"
+
+# [[shared_state.paths]]
+# path = ".env.local"
+# type = "file"
+""",
+        encoding="utf-8",
+    )
+    info(f"created {config.relative_to(root)}")
 
 
 @app.command()

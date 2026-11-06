@@ -26,6 +26,7 @@ from .models import (
 
 console = Console(stderr=True)
 HAPPY_DEFAULT_MODEL = "sonnet"
+PROJECT_CONFIG = Path(".cw/config.toml")
 
 
 def info(message: str) -> None:
@@ -77,8 +78,40 @@ def git(root: Path, *args: str, check: bool = True, capture: bool = True) -> str
     return cp.stdout or ""
 
 
+def inferred_repo_root(path: Path) -> Path | None:
+    parts = path.parts
+    marker = (".claude", "worktrees")
+    for index in range(len(parts) - 1):
+        if parts[index : index + 2] == marker:
+            if index == 0:
+                return None
+            return Path(*parts[:index]).resolve()
+    return None
+
+
+def current_path() -> Path | None:
+    try:
+        return Path.cwd()
+    except OSError:
+        pwd = os.environ.get("PWD")
+        if pwd:
+            path = Path(pwd)
+            if path.is_absolute():
+                return path
+    return None
+
+
 def repo_root() -> Path:
-    cp = run(["git", "worktree", "list", "--porcelain"], check=False, capture=True)
+    cwd = current_path()
+    inferred = inferred_repo_root(cwd) if cwd else None
+    git_args = ["git", "worktree", "list", "--porcelain"]
+    if cwd and cwd.exists():
+        git_args = ["git", "-C", str(cwd), "worktree", "list", "--porcelain"]
+    cp = run(git_args, check=False, capture=True)
+    if cp.returncode != 0 and inferred is not None and inferred.is_dir():
+        cp = run(["git", "-C", str(inferred), "worktree", "list", "--porcelain"], check=False, capture=True)
+        if cp.returncode == 0:
+            return inferred
     if cp.returncode != 0:
         raise CwError("not inside a git repository")
     for line in (cp.stdout or "").splitlines():
@@ -291,8 +324,8 @@ def default_prompt_path(prompt_file: Optional[Path]) -> Path:
     return Path.home() / ".config/cw/session-prompt.md"
 
 
-def default_config_path() -> Path:
-    return Path.home() / ".config/cw/config.toml"
+def project_config_path(root: Path) -> Path:
+    return root / PROJECT_CONFIG
 
 
 def validate_shared_state_path(value: str) -> Path:
@@ -304,15 +337,19 @@ def validate_shared_state_path(value: str) -> Path:
     return path
 
 
-def load_shared_state_entries(config_path: Path | None = None) -> list[SharedStateEntry]:
-    path = config_path or default_config_path()
+def load_shared_state_entries(config_path: Path | None = None, *, root: Path | None = None) -> list[SharedStateEntry]:
+    path = config_path or (project_config_path(root) if root is not None else PROJECT_CONFIG)
     if not path.is_file():
         return []
     with path.open("rb") as f:
         data = tomllib.load(f)
     raw_entries = data.get("shared_state", [])
     if isinstance(raw_entries, dict):
-        entries = list(raw_entries.values())
+        paths = raw_entries.get("paths")
+        if paths is not None:
+            entries = paths
+        else:
+            entries = list(raw_entries.values())
     elif isinstance(raw_entries, list):
         entries = raw_entries
     else:
@@ -339,7 +376,7 @@ def apply_shared_state(
     config_path: Path | None = None,
     log: Callable[[str], None] | None = None,
 ) -> None:
-    entries = load_shared_state_entries(config_path)
+    entries = load_shared_state_entries(config_path, root=root)
     if not entries:
         return
     for entry in entries:

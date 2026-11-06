@@ -37,14 +37,17 @@ install is verified and PATH ordering is intentional.
 ## Shared State
 
 `cw` can symlink selected repo-local state into each worktree. Configure
-allowlisted paths in `~/.config/cw/config.toml`:
+allowlisted paths in the project-local `.cw/config.toml`. Run `cw init` to
+create a starter config:
 
 ```toml
-[[shared_state]]
+[shared_state]
+
+[[shared_state.paths]]
 path = ".staffreview"
 type = "dir"
 
-[[shared_state]]
+[[shared_state.paths]]
 path = ".env.local"
 type = "file"
 ```
@@ -53,3 +56,4 @@ Paths must be relative and stay inside the repo. `cw new` creates the root
 target if needed, then creates a relative symlink in the new worktree. `cw
 resume` repairs/checks links before relaunching a dead session. Existing real
 files, directories, or wrong symlinks in the worktree are never overwritten.
+Only add paths that are intentionally project-local runtime state.
